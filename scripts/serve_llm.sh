@@ -7,6 +7,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The llama.cpp binary bakes an ABSOLUTE RUNPATH at build time; if the tree was
+# moved (e.g. into this repo), that path is stale and the loader can't find the
+# shared libs (libllama-server-impl.so, libggml-*.so). Point it at the real build
+# dir so the server launches regardless of where it was originally built.
+export LD_LIBRARY_PATH="$ROOT/vendor/llama.cpp/build/bin:${LD_LIBRARY_PATH:-}"
+
 BIN="vendor/llama.cpp/build/bin/llama-server"
 GGUF="models/gemma4/gemma-4-12B-it-Q8_0.gguf"
 MMPROJ="models/gemma4/mmproj-gemma-4-12B-it-Q8_0.gguf"
