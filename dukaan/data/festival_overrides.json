@@ -1,0 +1,45 @@
+{
+  "stock_hints": {
+    "makar sankranti": "til-gud, laddoo, peanuts, khichdi raashan, patang/manjha",
+    "republic day": "tiranga jhande, mithai, snacks, cold drinks, chocolates",
+    "holi": "gulaal/colours, pichkari, gujiya & mithai, cold drinks, namkeen, dry fruits",
+    "eid": "sewai/vermicelli, dry fruits, sugar, ghee, dates (khajoor), milk",
+    "ram navami": "vrat items (kuttu/singhara atta, sabudana, sendha namak), fruits, panjiri, mithai",
+    "raksha bandhan": "rakhi, mithai, chocolates, dry fruits, gift packs",
+    "janmashtami": "makhan-mishri, dahi, dry fruits, panjiri, fruits, vrat items",
+    "ganesh chaturthi": "modak/mithai, dry fruits, nariyal, puja samagri",
+    "navratri": "vrat items (kuttu/singhara atta, sabudana, sendha namak), fruits, dry fruits, ghee, mithai",
+    "dussehra": "mithai, dry fruits, snacks, cold drinks, gift packs",
+    "karwa chauth": "sargi items (dry fruits, mathri, feni, fruits), mithai, sewai, gifts",
+    "diwali": "diye, candles, mithai, dry fruits, gift packs, namkeen, cold drinks, phuljhadi",
+    "deepavali": "diye, candles, mithai, dry fruits, gift packs, namkeen, cold drinks, phuljhadi",
+    "christmas": "cake & cake mix, chocolates, candles, dry fruits, snacks, gift packs",
+    "new year": "snacks/namkeen, cold drinks, chocolates, sweets, gift packs, party items"
+  },
+  "extra": {
+    "2026": [
+      {
+        "name": "Karwa Chauth",
+        "date": "2026-10-29",
+        "stock": "sargi items (dry fruits, mathri, feni, fruits), mithai, sewai, gifts"
+      },
+      {
+        "name": "New Year's Eve",
+        "date": "2026-12-31",
+        "stock": "snacks/namkeen, cold drinks, chocolates, sweets, gift packs, party items"
+      }
+    ],
+    "2027": [
+      {
+        "name": "Karwa Chauth",
+        "date": "2027-11-07",
+        "stock": "sargi items (dry fruits, mathri, feni, fruits), mithai, sewai, gifts"
+      },
+      {
+        "name": "New Year's Eve",
+        "date": "2027-12-31",
+        "stock": "snacks/namkeen, cold drinks, chocolates, sweets, gift packs, party items"
+      }
+    ]
+  }
+}

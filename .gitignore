@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Large / regenerable runtime artifacts (rebuild via README Quickstart)
+/models/
+/vendor/
+/data/
+/logs/
+*.log
+*.wav
+*.db
+*.db-journal
+
+# Local env & secrets (.env.example IS committed)
+.env
+.env.*
+!.env.example
+
+# OS cruft
+.DS_Store
