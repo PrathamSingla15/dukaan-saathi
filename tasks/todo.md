@@ -66,3 +66,60 @@ Locked: full batch/FEFO lots · replies Hindi/Hinglish for now · STT large‑v3
 **Verification:** 59 headless tests pass (mock LLM/STT/vision) + 9/9 real-model GPU e2e (Slurm 1327).
 **Scope honored:** NO Gradio screens / Dockerfile / HF Space built. Replies Hindi/Hinglish for now (multilingual = documented future switch).
 **Deferred:** conversational challan-in-chat tool (wizard is the deliverable); one-call briefing optimization; multilingual reply+TTS.
+
+---
+
+# UI Rewrite — "Bahi-Khata" interface ✅ DONE (2026-06-09)
+
+**Goal:** Rewrite the live Gradio app (`dukaan/app.py`) into a beautiful custom-HTML
+"Bahi-Khata ledger" interface. English default + instant Hindi toggle. Surface most
+features. UI-only — NO backend logic changes. Deploys straight to the HF Space.
+
+**Decisions locked:** rewrite live app (not a throwaway prototype) · Bahi-Khata aesthetic
+(cream paper, red margin rules, indigo ink, brass numerals, humanist serifs) · Gradio 6.16
+(css/js/head/theme on `launch()`; `gr.HTML` supports `.click()`) · agent replies stay Hindi
+(backend constraint), ALL chrome toggles EN⇄HI client-side.
+
+## Build
+- [ ] `assets/style.css` — full aesthetic (paper grain, ledger rules, brass numerals, motion, all components, `.i18n-en/.i18n-hi` visibility, responsive)
+- [ ] `assets/head.html` — Google Fonts (Fraunces / Tiro Devanagari Hindi / IBM Plex Mono) + global JS (lang toggle, page nav, click delegation, ask-prefill, init)
+- [ ] `app.py` rewrite — render helpers + 6 pages + masthead/nav/toggle + import-light `main()`
+
+## Pages (surface most features)
+- [ ] Aaj/Today — morning briefing + dashboard cards (stock value, today's sales, expiring/FEFO, low stock, udhaar, slow movers, festival); offline-safe
+- [ ] Baat-cheet/Talk — voice + photo + text → chat (ledger entries) + haan/nahi confirm bar + TTS + intent/lang chips + STT/OCR retry states
+- [ ] Khata/Credit — udhaar customers (overdue flags) + WhatsApp reminder drafts
+- [ ] Maal/Stock — stock value + expiring lots + low stock + slow movers tables
+- [ ] Saamaan/Receive — challan photo → editable preview → commit
+- [ ] Naya Khata/Setup — onboarding wizard (profile→stock→khata→verify→commit), gated on `is_onboarding_active()`
+
+## Verify
+- [ ] `build_ui()` constructs, no model load at import
+- [ ] Every HTML helper renders against a real `dashboard_snapshot_struct()`
+- [ ] Existing pytest suite still green (heavy deps stubbed)
+- [ ] Launch headless + screenshot Today / Talk + EN⇄HI flip
+
+## Review ✅ DONE (verified, 2026-06-09)
+**Delivered (UI-only, zero backend changes):**
+- `dukaan/app.py` rewritten — custom-HTML ledger interface; 6 pages (Today / Talk / Khata / Stock /
+  Receive / Setup); render helpers for every surface; import-light; imports only the seam
+  (`session`/`onboarding`/`receiving`) + `proactive`/`config`/`db`.
+- `dukaan/assets/style.css` — full Bahi-Khata system (paper grain, red margin rule, brass numerals,
+  motion, all components, `.i18n-en/.i18n-hi` toggle, responsive).
+- `dukaan/assets/head.html` — Google Fonts (Fraunces / Tiro Devanagari Hindi / IBM Plex Mono) + client
+  JS (instant EN⇄Hindi toggle, page nav, click delegation, tap-to-ask, init).
+- `main()` now injects CSS via `head=build_head()` (NOT `css_paths`, which Gradio scopes under
+  `.contain` and would break the `body.lang-hi` toggle — see lessons.md).
+
+**Verified:**
+- `build_ui()` constructs with no model load at import; every render helper renders against a live
+  `dashboard_snapshot_struct()`.
+- pytest: 55 passed / 2 skipped (no regressions).
+- Launched headless + screenshotted all 6 pages + the EN⇄HI flip (`logs/ui_*.png`). DOM-probe confirmed
+  Hindi spans flip to `display:inline` with real width and the Devanagari/Tiro font.
+
+**Notes / follow-ups (not blocking):**
+- Agent replies stay Hindi (backend constraint), surfaced intentionally; all chrome toggles.
+- Receive preview is read-only (parse → review → commit); inline row-edit deferred (re-upload to redo).
+- For the HF Space: keep the Google Fonts `<link>` (Spaces have internet); Noto is a CSS fallback.
+- Screenshots in `logs/ui_*.png` are verification artifacts — safe to delete.

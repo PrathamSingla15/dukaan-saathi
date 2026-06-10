@@ -9,9 +9,10 @@ dependencies = [
     "gradio>=4.44",
     # --- Speech ---
     "faster-whisper>=1.0.3", # STT (CTranslate2, bundles ffmpeg via PyAV; numpy in)
-    "torch>=2.4", # TTS backend (parler / mms)
+    "torch>=2.4", # TTS backend (veena / mms / parler)
     "torchaudio>=2.4",
     "soundfile>=0.12.1",
+    "snac>=1.2", # SNAC neural-audio decoder for the default Veena TTS engine
     "scipy>=1.11", # resample_poly (avoid librosa/numba/numpy headaches)
     "numpy>=1.26,<2.2",
     # --- Vision / misc ---

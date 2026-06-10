@@ -4,14 +4,14 @@
 #
 #   - Gemma-4-12B-it Q8_0 GGUF + vision mmproj  -> models/gemma4/  (llama.cpp)
 #   - faster-whisper large-v3                   -> HF cache        (STT)
-#   - facebook/mms-tts-hin                      -> HF cache        (TTS, default)
+#   - maya-research/veena-tts + snac_24khz      -> HF cache        (TTS, DEFAULT)
+#   - facebook/mms-tts-hin                      -> HF cache        (TTS fallback)
 #
-# NOTE: ai4bharat/indic-parler-tts (the most natural Hindi voice) is a GATED HF
-# repo and is NOT downloaded here. To use it instead of MMS:
-#   1. Request access at https://huggingface.co/ai4bharat/indic-parler-tts
-#   2. `huggingface-cli login`  (paste a token with read access)
-#   3. `uv pip install git+https://github.com/huggingface/parler-tts.git`
-#   4. Run with  DUKAAN_TTS_ENGINE=parler  (tts.py falls back to mms if missing).
+# NOTE: Veena (the default voice — speaks Hindi/English/Hinglish) is a GATED HF
+# repo. `huggingface-cli login` with an authorized token (or set HF_TOKEN) BEFORE
+# running this. Without access the veena download is skipped and the app falls
+# back to MMS (Devanagari-only). ai4bharat/indic-parler-tts is another gated
+# option: `uv pip install parler-tts` and run with DUKAAN_TTS_ENGINE=parler.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -33,7 +33,15 @@ for fname in ("gemma-4-12B-it-Q8_0.gguf", "mmproj-gemma-4-12B-it-Q8_0.gguf"):
 wpath = snapshot_download(repo_id="Systran/faster-whisper-large-v3")
 print(f"  [whisper] Systran/faster-whisper-large-v3 -> {wpath}")
 
-# ---- facebook/mms-tts-hin (TTS, default engine) -> default HF cache ----
+# ---- Veena (DEFAULT TTS) + its SNAC decoder -> default HF cache (GATED) ----
+for repo in ("maya-research/veena-tts", "hubertsiuzdak/snac_24khz"):
+    try:
+        vpath = snapshot_download(repo_id=repo)
+        print(f"  [veena]   {repo} -> {vpath}")
+    except Exception as e:  # gated / not logged in — app will fall back to MMS
+        print(f"  [veena]   SKIP {repo}: {type(e).__name__} — login with an authorized token to enable Veena.")
+
+# ---- facebook/mms-tts-hin (TTS fallback) -> default HF cache ----
 tpath = snapshot_download(repo_id="facebook/mms-tts-hin")
 print(f"  [tts]     facebook/mms-tts-hin -> {tpath}")
 

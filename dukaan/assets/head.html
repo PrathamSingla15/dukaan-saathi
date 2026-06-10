@@ -1,0 +1,185 @@
+<!-- Dukaan Saathi — fonts + client-side interaction layer ------------------- -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,800;9..144,900&family=Tiro+Devanagari+Hindi:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Phosphor icon webfont — replaces emojis across the UI (used as <i class="ph ph-*">) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+
+<script>
+/* The Bahi-Khata interface is a light "paper" design — there is no dark variant.
+   Force Gradio's light mode BEFORE it initialises (otherwise the OS dark setting
+   makes the input widgets render black/grey on the cream paper). Gradio reads the
+   `__theme` query param at startup; set it once (guarded so there's no reload loop). */
+(function () {
+  try {
+    var u = new URL(window.location.href);
+    if (u.searchParams.get("__theme") !== "light") {
+      u.searchParams.set("__theme", "light");
+      window.location.replace(u.toString());
+    }
+  } catch (e) {}
+})();
+
+/* All nav + the EN/HI toggle run purely client-side so they're instant and
+   never round-trip to the server. Backend actions still use Gradio events. */
+(function () {
+  "use strict";
+
+  window.dukaanSetLang = function (lang) {
+    var hi = lang === "hi";
+    document.body.classList.toggle("lang-hi", hi);
+    document.body.classList.toggle("lang-en", !hi);
+    try { localStorage.setItem("dukaan_lang", hi ? "hi" : "en"); } catch (e) {}
+    document.querySelectorAll("[data-lang-btn]").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-lang-btn") === (hi ? "hi" : "en"));
+    });
+  };
+
+  window.dukaanToggleLang = function () {
+    window.dukaanSetLang(document.body.classList.contains("lang-hi") ? "en" : "hi");
+  };
+
+  window.dukaanShowPage = function (page) {
+    document.querySelectorAll(".dk-page").forEach(function (el) {
+      el.classList.toggle("dk-page--active", el.id === "page-" + page);
+    });
+    document.querySelectorAll(".dk-tab").forEach(function (el) {
+      el.classList.toggle("dk-tab--active", el.getAttribute("data-page") === page);
+    });
+    var sh = document.querySelector(".dk-shell");
+    if (sh && sh.scrollIntoView) sh.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (page === "talk") window.dukaanScrollChat();
+  };
+
+  /* Pin the chat to the latest message. */
+  window.dukaanScrollChat = function () {
+    var c = document.querySelector("#dk-chat-panel .dk-chat");
+    if (c) requestAnimationFrame(function () { c.scrollTop = c.scrollHeight; });
+  };
+
+  /* Auto-scroll while the reply streams: Gradio replaces the chat innerHTML on
+     every token (resetting scroll to the top), so we watch the panel and re-pin
+     to the bottom on each mutation. */
+  function setupAutoScroll() {
+    var panel = document.getElementById("dk-chat-panel");
+    if (!panel) { setTimeout(setupAutoScroll, 200); return; }
+    var pending = false;
+    new MutationObserver(function () {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(function () {
+        pending = false;
+        var c = panel.querySelector(".dk-chat");
+        if (c) c.scrollTop = c.scrollHeight;
+      });
+    }).observe(panel, { childList: true, subtree: true, characterData: true });
+  }
+
+  /* Tap a customer / item row to ask the assistant about it: fill the chat
+     composer and submit it. */
+  window.dukaanAsk = function (text) {
+    if (!text) return;
+    window.dukaanShowPage("talk");
+    var root = document.getElementById("dk-composer");
+    var ta = root && (root.querySelector("textarea") || root.querySelector("input[type=text]"));
+    if (!ta) return;
+    // use the native setter so Gradio/Svelte's two-way binding picks up the value
+    var d = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
+    if (ta.tagName === "TEXTAREA" && d && d.set) d.set.call(ta, text); else ta.value = text;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    ta.focus();
+    setTimeout(function () {
+      var btn = root.querySelector('button.submit-button, button[aria-label="Submit" i], button[title="Submit" i]');
+      if (btn) { btn.click(); return; }
+      ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      ta.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+    }, 100);
+  };
+
+  /* One delegated listener handles every client-side control, even those
+     rendered later by Gradio inside gr.HTML. */
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    var pg = t.closest && t.closest("[data-page]");
+    if (pg) { window.dukaanShowPage(pg.getAttribute("data-page")); return; }
+    var lb = t.closest && t.closest("[data-lang-btn]");
+    if (lb) { window.dukaanSetLang(lb.getAttribute("data-lang-btn")); return; }
+    var ask = t.closest && t.closest("[data-ask]");
+    if (ask) { window.dukaanAsk(ask.getAttribute("data-ask")); return; }
+    /* khata: the "Send reminder" pill (checked first — it lives inside the row) */
+    var rmd = t.closest && t.closest("[data-remind]");
+    if (rmd) { window.dukaanRemind(rmd.getAttribute("data-remind")); return; }
+    /* khata: tapping a customer row selects it (single-select) to reveal its pill */
+    var krow = t.closest && t.closest("[data-khata-row]");
+    if (krow) {
+      var was = krow.classList.contains("dk-row--selected");
+      document.querySelectorAll("[data-khata-row].dk-row--selected").forEach(function (el) {
+        el.classList.remove("dk-row--selected");
+      });
+      if (!was) krow.classList.add("dk-row--selected");
+      return;
+    }
+    var sp = t.closest && t.closest("[data-speak-idx]");
+    if (sp) { window.dukaanSpeak(sp.getAttribute("data-speak-idx")); return; }
+  });
+
+  /* Per-message speaker icon: write the message index into the hidden bridge
+     textbox and click the hidden button → speak() synthesizes just that reply. */
+  window.dukaanSpeak = function (idx) {
+    var inp = document.querySelector("#dk-speak-idx textarea") ||
+              document.querySelector("#dk-speak-idx input");
+    if (!inp) return;
+    var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
+    var d = Object.getOwnPropertyDescriptor(proto.prototype, "value");
+    var val = String(idx) + "|" + Date.now();   // nonce → value always changes
+    if (d && d.set) d.set.call(inp, val); else inp.value = val;
+    // input updates Gradio's bound value; change/blur commit it before we click
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+    inp.dispatchEvent(new Event("blur", { bubbles: true }));
+    var btn = document.getElementById("dk-speak-btn");
+    if (btn) setTimeout(function () { (btn.querySelector("button") || btn).click(); }, 300);
+  };
+
+  /* Khata row "Send reminder" pill: write the customer name into the hidden bridge
+     textbox and click the hidden button → remind_one() drafts that one reminder. */
+  window.dukaanRemind = function (name) {
+    var inp = document.querySelector("#dk-remind-name textarea") ||
+              document.querySelector("#dk-remind-name input");
+    if (!inp) return;
+    var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
+    var d = Object.getOwnPropertyDescriptor(proto.prototype, "value");
+    var val = String(name) + "|" + Date.now();   // nonce → value always changes
+    if (d && d.set) d.set.call(inp, val); else inp.value = val;
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+    inp.dispatchEvent(new Event("blur", { bubbles: true }));
+    var btn = document.getElementById("dk-remind-btn");
+    if (btn) setTimeout(function () { (btn.querySelector("button") || btn).click(); }, 300);
+  };
+
+  window.dukaanInit = function () {
+    var saved = "en";
+    try { saved = localStorage.getItem("dukaan_lang") || "en"; } catch (e) {}
+    window.dukaanSetLang(saved);
+    /* Respect the page the server marked active (e.g. onboarding on first run);
+       otherwise default to Today and just sync the tab highlight. */
+    var active = document.querySelector(".dk-page--active");
+    if (active) {
+      var pg = active.id.replace("page-", "");
+      document.querySelectorAll(".dk-tab").forEach(function (el) {
+        el.classList.toggle("dk-tab--active", el.getAttribute("data-page") === pg);
+      });
+    } else {
+      window.dukaanShowPage("today");
+    }
+  };
+
+  /* Gradio can mount after DOMContentLoaded — retry until the tabs exist. */
+  var tries = 0;
+  (function ready() {
+    if (document.querySelector(".dk-tab") || tries > 40) { window.dukaanInit(); setupAutoScroll(); return; }
+    tries++; setTimeout(ready, 80);
+  })();
+})();
+</script>

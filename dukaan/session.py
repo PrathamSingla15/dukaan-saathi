@@ -19,6 +19,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from dukaan import agent, config, i18n, llm, normalize, ops, proactive, staging, stt, tts
@@ -70,6 +71,9 @@ class TurnResult:
     tool_calls: list = field(default_factory=list)
     user_text: str = ""
     error: str | None = None
+    # progress hint for streaming turns ("" | "read" | "write"): what the agent is
+    # doing before the answer streams (a tool/DB call). UI shows it with the dots.
+    status: str = ""
 
     def to_dict(self) -> dict:
         """Return a JSON-able view of this result.
@@ -94,6 +98,7 @@ class TurnResult:
             "tool_calls": self.tool_calls,
             "user_text": self.user_text,
             "error": self.error,
+            "status": self.status,
         }
 
 
@@ -171,6 +176,65 @@ def _looks_no(s) -> bool:
 # --------------------------------------------------------------------------- turns
 
 
+def _prepare_turn(audio, text, image, thread_id, tts):
+    """Assemble the user message (STT / OCR / typed) for one turn.
+
+    Returns a ``(user_text, detected_lang)`` tuple to run the agent on, OR a
+    finished :class:`TurnResult` that short-circuits the turn (STT/OCR retry,
+    empty input, or a deterministic yes/no confirm). Shared by :func:`handle_turn`
+    and :func:`handle_turn_stream` so their pre-agent behaviour stays identical.
+    """
+    user_text = ""
+    detected_lang = config.OWNER_LANG or "hi"
+
+    # voice in -> transcribe (short-circuit to a clarification on failure)
+    if audio is not None:
+        r = stt.transcribe(audio)
+        detected_lang = r.language or detected_lang
+        if not r.ok:
+            clar = i18n.stt_retry_message(r.language, r.reason)
+            return TurnResult(
+                reply_text=clar, clarification=clar, detected_language=detected_lang,
+                reply_audio=_tts_or_none(clar, tts),
+                dashboard_snapshot=dashboard_snapshot_struct(), intent_badge="chat",
+            )
+        user_text = r.text
+    elif text:
+        user_text = (text or "").strip()
+
+    # image in -> OCR-describe and merge (re-upload short-circuit on failure)
+    if image is not None:
+        d = normalize.describe_for_agent(image)
+        if not d.ok:
+            return TurnResult(
+                reply_text=d.agent_text, needs_reupload=True, clarification=d.agent_text,
+                detected_language=detected_lang, reply_audio=_tts_or_none(d.agent_text, tts),
+                dashboard_snapshot=dashboard_snapshot_struct(), intent_badge="chat",
+            )
+        user_text = (user_text + "\n" + d.agent_text).strip() if user_text else d.agent_text
+
+    # nothing actionable -> ask the owner to repeat
+    if not user_text.strip():
+        clar = i18n.stt_retry_message(detected_lang, "empty")
+        return TurnResult(
+            reply_text=clar, clarification=clar, detected_language=detected_lang,
+            reply_audio=_tts_or_none(clar, tts),
+            dashboard_snapshot=dashboard_snapshot_struct(), intent_badge="chat",
+        )
+
+    # Deterministic confirm: if a write is staged and the owner says a clear
+    # yes/no, resolve it HERE (the small LLM is only needed to STAGE; commit/cancel
+    # never depends on it).
+    if staging.get_pending(thread_id) and (_looks_yes(user_text) or _looks_no(user_text)):
+        tr = confirm_pending(user_text, thread_id=thread_id, tts=tts)
+        return TurnResult(
+            reply_text=tr.reply_text, reply_audio=tr.reply_audio, detected_language=detected_lang,
+            dashboard_snapshot=tr.dashboard_snapshot, intent_badge="write", user_text=user_text,
+        )
+
+    return user_text, detected_lang
+
+
 def handle_turn(
     *,
     audio=None,
@@ -182,92 +246,22 @@ def handle_turn(
 ) -> TurnResult:
     """Drive one shopkeeper turn (voice and/or image and/or text) end to end.
 
-    Assembles the user message from whatever was provided — transcribing audio,
-    OCR-describing an image, taking typed text — then runs the agent and shapes
-    the reply (plus optional TTS and a fresh dashboard snapshot) into a
+    Assembles the user message (transcribe / OCR / typed), runs the agent, and
+    shapes the reply (plus optional TTS and a fresh dashboard snapshot) into a
     :class:`TurnResult`. STT/OCR failures short-circuit into a clarification turn.
     Never raises: any unexpected error becomes a polite Hindi apology result.
     """
     try:
-        # 1) defaults
-        user_text = ""
-        detected_lang = config.OWNER_LANG or "hi"
+        prep = _prepare_turn(audio, text, image, thread_id, tts)
+        if isinstance(prep, TurnResult):
+            return prep
+        user_text, detected_lang = prep
 
-        # 2) voice in -> transcribe (short-circuit to a clarification on failure)
-        if audio is not None:
-            r = stt.transcribe(audio)
-            detected_lang = r.language or detected_lang
-            if not r.ok:
-                clar = i18n.stt_retry_message(r.language, r.reason)
-                return TurnResult(
-                    reply_text=clar,
-                    clarification=clar,
-                    detected_language=detected_lang,
-                    reply_audio=_tts_or_none(clar, tts),
-                    dashboard_snapshot=dashboard_snapshot_struct(),
-                    intent_badge="chat",
-                )
-            user_text = r.text
-        # 3) else typed text
-        elif text:
-            user_text = (text or "").strip()
-
-        # 4) image in -> OCR-describe and merge (re-upload short-circuit on failure)
-        if image is not None:
-            d = normalize.describe_for_agent(image)
-            if not d.ok:
-                return TurnResult(
-                    reply_text=d.agent_text,
-                    needs_reupload=True,
-                    clarification=d.agent_text,
-                    detected_language=detected_lang,
-                    reply_audio=_tts_or_none(d.agent_text, tts),
-                    dashboard_snapshot=dashboard_snapshot_struct(),
-                    intent_badge="chat",
-                )
-            user_text = (
-                (user_text + "\n" + d.agent_text).strip() if user_text else d.agent_text
-            )
-
-        # 5) nothing actionable -> ask the owner to repeat
-        if not user_text.strip():
-            clar = i18n.stt_retry_message(detected_lang, "empty")
-            return TurnResult(
-                reply_text=clar,
-                clarification=clar,
-                detected_language=detected_lang,
-                reply_audio=_tts_or_none(clar, tts),
-                dashboard_snapshot=dashboard_snapshot_struct(),
-                intent_badge="chat",
-            )
-
-        # 5b) Deterministic confirm: if a write is already staged for this thread
-        # and the owner's message is a clear yes/no, resolve it HERE instead of
-        # relying on the model to re-call confirm_pending_tool. Makes
-        # confirm-before-write robust end to end (the small LLM is only needed to
-        # STAGE on the first turn; the commit/cancel never depends on it).
-        if staging.get_pending(thread_id) and (_looks_yes(user_text) or _looks_no(user_text)):
-            tr = confirm_pending(user_text, thread_id=thread_id, tts=tts)
-            return TurnResult(
-                reply_text=tr.reply_text,
-                reply_audio=tr.reply_audio,
-                detected_language=detected_lang,
-                dashboard_snapshot=tr.dashboard_snapshot,
-                intent_badge="write",
-                user_text=user_text,
-            )
-
-        # 6) run the agent
         res = agent.run_agent(user_text, thread_id=thread_id)
         reply = (res.get("reply") or "").strip() or _APOLOGY_HI
         pend = res.get("pending")
-        pc = (
-            PendingConfirmation(token=pend["batch_id"], prompt=pend.get("summary_hi", ""))
-            if pend
-            else None
-        )
-
-        # 7) shape the successful turn
+        pc = (PendingConfirmation(token=pend["batch_id"], prompt=pend.get("summary_hi", ""))
+              if pend else None)
         return TurnResult(
             reply_text=reply,
             detected_language=detected_lang,
@@ -281,6 +275,73 @@ def handle_turn(
         )
     except Exception as e:  # noqa: BLE001 — the seam must never crash the front-end
         return TurnResult(
+            reply_text=_APOLOGY_HI,
+            error=str(e),
+            dashboard_snapshot=dashboard_snapshot_struct(),
+            intent_badge="chat",
+        )
+
+
+def handle_turn_stream(
+    *,
+    audio=None,
+    text=None,
+    image=None,
+    thread_id: str,
+    tts: bool = False,
+    mode: str = "auto",
+):
+    """Streaming variant of :func:`handle_turn` — a generator of :class:`TurnResult`.
+
+    Yields the partial reply as the agent's answer streams in (each TurnResult has
+    a longer ``reply_text``); the FINAL yield carries the complete reply plus
+    ``pending_confirmation``, ``tool_calls``, ``intent_badge`` and a fresh
+    ``dashboard_snapshot``. Non-agent turns (STT/OCR retry, empty, yes/no confirm)
+    yield a single finished TurnResult. ``tts`` defaults off (the UI speaks on
+    demand). Never raises.
+    """
+    try:
+        prep = _prepare_turn(audio, text, image, thread_id, tts)
+        if isinstance(prep, TurnResult):
+            yield prep
+            return
+        user_text, detected_lang = prep
+
+        partial = ""
+        final: dict = {}
+        for kind, payload in agent.stream_agent(user_text, thread_id=thread_id):
+            if kind == "delta":
+                partial = payload
+                yield TurnResult(
+                    reply_text=partial, detected_language=detected_lang,
+                    user_text=user_text, intent_badge="chat",
+                )
+            elif kind == "status":
+                # progress hint (tool/DB call) before any answer text streams
+                yield TurnResult(
+                    status=payload, detected_language=detected_lang,
+                    user_text=user_text, intent_badge="chat",
+                )
+            else:  # "final"
+                final = payload or {}
+
+        reply = (final.get("reply") or partial or "").strip() or _APOLOGY_HI
+        pend = final.get("pending")
+        pc = (PendingConfirmation(token=pend["batch_id"], prompt=pend.get("summary_hi", ""))
+              if pend else None)
+        yield TurnResult(
+            reply_text=reply,
+            detected_language=detected_lang,
+            reply_audio=_tts_or_none(reply, tts),
+            pending_confirmation=pc,
+            intent_badge=final.get("intent", "chat"),
+            tool_calls=final.get("tool_calls", []),
+            user_text=user_text,
+            dashboard_snapshot=dashboard_snapshot_struct(),
+            error=final.get("error"),
+        )
+    except Exception as e:  # noqa: BLE001 — the seam must never crash the front-end
+        yield TurnResult(
             reply_text=_APOLOGY_HI,
             error=str(e),
             dashboard_snapshot=dashboard_snapshot_struct(),
@@ -311,6 +372,25 @@ def confirm_pending(answer: str, *, thread_id: str, tts: bool = True) -> TurnRes
     )
 
 
+def _strip_maalik(s: str) -> str:
+    """Scrub the 'maalik'/'मालिक' (master/owner) honorific the model sometimes adds.
+
+    The briefing speaks *to* the shopkeeper; being addressed as 'master' is not
+    wanted. We instruct the model against it in the system prompt and scrub the
+    output here as a guarantee. Handles the common '<maalik> ji' vocative too.
+    """
+    if not s:
+        return s
+    s = re.sub(r"\b(maa?lik)\s+ji\b[\s,]*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"मालिक\s*जी[\s,]*", "", s)
+    s = re.sub(r"\bmaa?lik\b\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"मालिक\s*", "", s)
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    s = re.sub(r"\s+([,.।!?])", r"\1", s)
+    s = re.sub(r"^[\s,।.!?]+", "", s)   # tidy a sentence-initial leftover comma
+    return s.strip()
+
+
 def morning_briefing(*, tts: bool = False) -> dict:
     """Compose the "subah ka haal" briefing from the proactive checks.
 
@@ -325,7 +405,8 @@ def morning_briefing(*, tts: bool = False) -> dict:
 
     system = (
         "Tum ek kirana dukaan ke samajhdar sahayak ho jo dukaandaar ko subah ka "
-        "haal saral, dostana Hindi me batate ho."
+        "haal saral, dostana Hindi me batate ho. Dukaandaar ko kabhi 'maalik' ya "
+        "'malik' mat kaho, hamesha 'aap' kaho ya seedha baat karo."
     )
     prompt = (
         "Niche aaj subah ke kuch tathya diye hain (expiry, udhaar, tyohaar). "
@@ -337,6 +418,16 @@ def morning_briefing(*, tts: bool = False) -> dict:
         text = (llm.complete(prompt, system=system) or "").strip() or base
     except Exception:
         text = base
+    text = _strip_maalik(text)
 
     audio = _tts_or_none(text, tts)
     return {"text": text, "audio": audio, "parts": a}
+
+
+def speak(text: str) -> tuple | None:
+    """Synthesize arbitrary text to ``(sr, ndarray)`` for on-demand playback.
+
+    Backs the UI's per-message speaker button: replies are silent by default and
+    the owner taps to hear one. Never raises — returns ``None`` on empty/failure.
+    """
+    return _tts_or_none(text, True)

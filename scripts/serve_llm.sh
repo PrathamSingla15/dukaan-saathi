@@ -2,7 +2,9 @@
 # Launch the local Gemma-4-12B (vision-capable) llama.cpp server for Dukaan Saathi.
 # Local / debug helper — no Slurm here (see scripts/run.sbatch for the GPU batch job).
 #
-# Env overrides: PORT (8080), CTX (32768), NGL (99 = fully GPU-offloaded).
+# Env overrides: DUKAAN_LLM_PORT / PORT (8080), CTX (32768), NGL (99 = fully GPU-offloaded).
+# PORT wins if set; otherwise DUKAAN_LLM_PORT — the same var the app's client uses,
+# so one setting moves both the server and the UI/health-check together.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -17,7 +19,7 @@ BIN="vendor/llama.cpp/build/bin/llama-server"
 GGUF="models/gemma4/gemma-4-12B-it-Q8_0.gguf"
 MMPROJ="models/gemma4/mmproj-gemma-4-12B-it-Q8_0.gguf"
 
-PORT="${PORT:-8080}"
+PORT="${PORT:-${DUKAAN_LLM_PORT:-8080}}"
 CTX="${CTX:-32768}"
 NGL="${NGL:-99}"
 

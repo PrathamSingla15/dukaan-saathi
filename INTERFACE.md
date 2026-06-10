@@ -390,8 +390,11 @@ All values live in `dukaan/config.py` and are overridable via environment variab
 | `DUKAAN_WHISPER_MODEL` | `large-v3` | faster-whisper model name or HF repo |
 | `DUKAAN_STT_LANGUAGE` | `""` (auto) | Force a language code (e.g. `"hi"`) to skip auto-detect |
 | `DUKAAN_STT_HINDI_MODEL` | `digikar/vasista22-whisper-hindi-large-v2-ct2-int8` | Hindi-optimized 2nd-pass model (Apache-2.0, not gated). Downloaded on first use via faster-whisper |
-| `DUKAAN_TTS_ENGINE` | `mms` | `"mms"` (facebook/mms-tts-hin, fast, works out of the box) or `"parler"` (ai4bharat/indic-parler-tts, most natural; gated HF repo — requires approval + `huggingface-cli login`) |
-| `DUKAAN_MMS_MODEL` | `facebook/mms-tts-hin` | HF repo for MMS TTS |
+| `DUKAAN_TTS_ENGINE` | `veena` | `"veena"` (maya-research/veena-tts — Hindi/English/**Hinglish** via a SNAC decoder; gated HF repo, needs an authorized token + the `snac` package), `"mms"` (facebook/mms-tts-hin, fast but **Devanagari-only — silent on Latin**), or `"parler"` (ai4bharat/indic-parler-tts, gated, needs `parler-tts`). Any failure falls back to mms, then to silence. |
+| `DUKAAN_VEENA_SPEAKER` | `agastya` | Veena voice: `kavya` \| `agastya` \| `maitri` \| `vinaya` |
+| `DUKAAN_VEENA_4BIT` | `false` | `true` loads Veena in 4-bit (needs `bitsandbytes`+`accelerate`, ~2-3 GB VRAM); default is bf16 (~6 GB) |
+| `DUKAAN_VEENA_MODEL` / `DUKAAN_VEENA_SNAC` | `maya-research/veena-tts` / `hubertsiuzdak/snac_24khz` | Veena LM + its SNAC neural-audio decoder |
+| `DUKAAN_MMS_MODEL` | `facebook/mms-tts-hin` | HF repo for the MMS fallback TTS |
 | `DUKAAN_CONFIRM_WRITES` | `true` | Set to `false` to skip the yes/no confirmation step and commit immediately (not recommended for demo) |
 | `DUKAAN_GRADIO_HOST` | `0.0.0.0` | Gradio server bind address |
 | `DUKAAN_GRADIO_PORT` | `7860` | Gradio server port |
@@ -437,6 +440,6 @@ uv run python -m pytest tests/ -q
 **Hugging Face Space setup checklist:**
 
 1. Set `DUKAAN_DATA_DIR=/data` in Space secrets so the DBs persist across restarts.
-2. Pre-download Whisper models in the Dockerfile.
+2. Pre-download Whisper **and the default Veena TTS** in the Dockerfile (`bash scripts/download_models.sh`). Veena (`maya-research/veena-tts` + `hubertsiuzdak/snac_24khz`) is **gated** — add an authorized `HF_TOKEN` Space secret so the download succeeds; without it the app falls back to MMS (Devanagari-only, silent on Hinglish). Set `DUKAAN_VEENA_4BIT=true` on small-GPU Spaces (~2-3 GB) or keep bf16 (~6 GB).
 3. The LLM server must run as a sidecar process (`scripts/serve_llm.sh`) — start it in `app.py` via `subprocess.Popen` before launching Gradio, or provision it as a separate Space endpoint.
 4. Use `DUKAAN_GRADIO_SHARE=false`; Spaces handles public access.

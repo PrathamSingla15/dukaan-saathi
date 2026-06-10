@@ -179,26 +179,37 @@ def _reminder_prompt(name: str, balance: float, earliest_due: str | None) -> str
     )
 
 
+_REMINDER_SYSTEM = (
+    "Tum ek chhoti kirana dukaan chalate ho jo apne customers ko "
+    "udhaar yaad dilane ke liye polite Hindi WhatsApp message bhejte ho.")
+
+
+def draft_reminder(name: str, balance: float, phone: str | None = None,
+                   earliest_due: str | None = None) -> dict:
+    """One polite Hindi WhatsApp reminder draft for a single customer.
+
+    LLM-written when the llama-server is up, else a fixed Hindi template. Returns
+    one ``{"customer", "balance", "phone", "draft"}`` entry — the same shape used
+    inside :func:`udhaar_reminder`.
+    """
+    bal = round(float(balance or 0), 2)
+    fallback = (f"नमस्ते {name} जी, आपका {_money(bal)} उधार बाकी है, "
+                "कृपया सुविधा अनुसार दे दें। धन्यवाद — दुकान")
+    draft = _draft_or_template(
+        _reminder_prompt(name, bal, earliest_due), _REMINDER_SYSTEM, fallback)
+    return {"customer": name, "balance": bal, "phone": phone, "draft": draft}
+
+
 def udhaar_reminder() -> dict:
     """Polite Hindi WhatsApp reminder drafts for every overdue udhaar.
 
     Returns ``{"count", "reminders": [{"customer", "balance", "phone", "draft"}],
     "message"}``. Each draft is LLM-written when possible, else a fixed template.
     """
-    system = ("Tum ek chhoti kirana dukaan ke maalik ho jo apne customers ko "
-              "udhaar yaad dilane ke liye polite Hindi WhatsApp message bhejte ho.")
-    overdue = ops.overdue_udhaar()
-
-    reminders: list[dict] = []
-    for c in overdue:
-        name = c["name"]
-        bal = round(float(c["balance"]), 2)
-        fallback = (f"नमस्ते {name} जी, आपका {_money(bal)} उधार बाकी है, "
-                    "कृपया सुविधा अनुसार दे दें। धन्यवाद — दुकान")
-        draft = _draft_or_template(
-            _reminder_prompt(name, bal, c.get("earliest_due")), system, fallback)
-        reminders.append({"customer": name, "balance": bal,
-                          "phone": c.get("phone"), "draft": draft})
+    reminders: list[dict] = [
+        draft_reminder(c["name"], c["balance"], c.get("phone"), c.get("earliest_due"))
+        for c in ops.overdue_udhaar()
+    ]
 
     if not reminders:
         message = "Koi overdue udhaar nahi hai — sab khaate time par hain. 👍"

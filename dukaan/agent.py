@@ -202,6 +202,71 @@ def run_agent(user_text: str, thread_id: str = "default") -> dict:
         }
 
 
+def stream_agent(user_text: str, thread_id: str = "default"):
+    """Stream one agent turn, token by token.
+
+    Yields ``("delta", accumulated_reply)`` as the assistant's final answer is
+    generated, then ``("final", {...})`` with the same shape as
+    :func:`run_agent`'s result (reply / messages / tool_calls / intent / pending /
+    error). Only assistant text (``AIMessageChunk``) is streamed — tool outputs
+    are filtered out. Never raises; any failure surfaces in the final payload.
+    """
+    staging.bind_thread(thread_id)
+    cfg = {"configurable": {"thread_id": thread_id},
+           "recursion_limit": config.AGENT_RECURSION_LIMIT}
+    acc = ""
+    try:
+        agent = build_agent()
+        last_status = ""
+        for chunk, _meta in agent.stream(
+            {"messages": [{"role": "user", "content": user_text}]},
+            config=cfg, stream_mode="messages",
+        ):
+            cls = chunk.__class__.__name__
+            if cls == "AIMessageChunk":
+                # a tool call is being formed -> tell the UI we're hitting the DB
+                for tc in (getattr(chunk, "tool_call_chunks", None) or []):
+                    nm = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                    if nm:
+                        code = "write" if nm in _WRITE_TOOLS else "read"
+                        if code != last_status:
+                            last_status = code
+                            yield "status", code
+                piece = _content_to_text(getattr(chunk, "content", ""))
+                if piece:
+                    acc += piece
+                    yield "delta", acc
+            elif cls == "ToolMessage":
+                nm = getattr(chunk, "name", None)
+                if nm:
+                    code = "write" if nm in _WRITE_TOOLS else "read"
+                    if code != last_status:
+                        last_status = code
+                        yield "status", code
+        # authoritative final state (for tool_calls + the committed reply)
+        try:
+            messages = agent.get_state(cfg).values.get("messages", [])
+        except Exception:  # noqa: BLE001
+            messages = []
+        reply = (_content_to_text(messages[-1].content) if messages else acc).strip() or acc.strip()
+        tool_calls = _collect_tool_calls(messages)
+        yield "final", {
+            "reply": reply,
+            "messages": messages,
+            "tool_calls": tool_calls,
+            "intent": _intent_from_tool_calls(tool_calls),
+            "pending": staging.get_pending(thread_id),
+            "error": None,
+        }
+    except Exception as e:  # noqa: BLE001 — surface as a graceful final payload
+        yield "final", {
+            "reply": acc.strip() or "Maaf kijiye, abhi javaab dene me dikkat aa rahi hai. "
+                                    "Kripya thodi der baad dobara poochhiye.",
+            "messages": [], "tool_calls": [], "intent": "chat",
+            "pending": staging.get_pending(thread_id), "error": str(e),
+        }
+
+
 # --------------------------------------------------------------------- intent badge
 _INTENT_CHOICES = {"write", "lookup", "diagnostic", "reminder", "chat"}
 

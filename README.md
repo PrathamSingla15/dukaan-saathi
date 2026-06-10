@@ -14,7 +14,7 @@ The shopkeeper just **talks in Hindi** (or snaps a photo of a bill / label). Eve
 | LLM + Vision/OCR | **Gemma-4-12B** (multimodal, Q8_0 GGUF) via **llama.cpp** (`llama-server`, OpenAI-compatible) |
 | Agentic framework | **deepagents** (LangChain) driving the local model via `ChatOpenAI` |
 | Speech → Text | **faster-whisper** `large-v3` (Hindi, numpy-in, no system ffmpeg) |
-| Text → Speech | **MMS-TTS Hindi** (`facebook/mms-tts-hin`, open) — Parler is HF-gated, switchable |
+| Text → Speech | **Veena** (`maya-research/veena-tts`, gated) — speaks Hindi/English/**Hinglish** via a SNAC decoder; `mms`/`parler` switchable via `DUKAAN_TTS_ENGINE` |
 | Database | **two SQLite databases** — `inventory.db` (catalog/stock) + `transactions.db` (sales/khata), unified read via `ATTACH` |
 | Frontend | **Gradio** single-screen app (mic · photo · chat · today-dashboard) |
 
@@ -24,7 +24,8 @@ The shopkeeper just **talks in Hindi** (or snaps a photo of a bill / label). Eve
 # 1. Install deps (uv)
 uv sync
 
-# 2. Download models (Gemma GGUF + mmproj, Whisper, Parler)
+# 2. Download models (Gemma GGUF + mmproj, Whisper, Veena + SNAC)
+#    Veena is a gated HF repo — `huggingface-cli login` with an authorized token first.
 bash scripts/download_models.sh
 
 # 3. Build + seed the two demo databases (inventory.db + transactions.db)

@@ -35,8 +35,13 @@ INVENTORY_DB_PATH = Path(_env("DUKAAN_INVENTORY_DB", str(DATA_DIR / "inventory.d
 TRANSACTIONS_DB_PATH = Path(_env("DUKAAN_TRANSACTIONS_DB", str(DATA_DIR / "transactions.db")))
 
 # --------------------------------------------------------------- LLM (llama-server)
-# OpenAI-compatible endpoint exposed by `llama-server`.
-LLM_BASE_URL = _env("DUKAAN_LLM_BASE_URL", "http://127.0.0.1:8080/v1")
+# Where llama-server listens. These also form the DEFAULT client endpoint below,
+# so setting DUKAAN_LLM_PORT alone keeps the server, the client, and the health
+# check in sync. Override DUKAAN_LLM_BASE_URL only for a fully custom/remote URL.
+LLM_HOST = _env("DUKAAN_LLM_HOST", "127.0.0.1")
+LLM_PORT = int(_env("DUKAAN_LLM_PORT", "8080"))
+# OpenAI-compatible endpoint exposed by `llama-server` (derived from host/port).
+LLM_BASE_URL = _env("DUKAAN_LLM_BASE_URL", f"http://{LLM_HOST}:{LLM_PORT}/v1")
 LLM_API_KEY = _env("DUKAAN_LLM_API_KEY", "not-needed")  # any non-empty string
 LLM_MODEL = _env("DUKAAN_LLM_MODEL", "gemma-4-12b")
 LLM_TEMPERATURE = float(_env("DUKAAN_LLM_TEMPERATURE", "0.0"))
@@ -56,8 +61,6 @@ GEMMA_GGUF = Path(
 GEMMA_MMPROJ = Path(
     _env("DUKAAN_GEMMA_MMPROJ", str(MODELS_DIR / "gemma4" / "mmproj-gemma-4-12B-it-Q8_0.gguf"))
 )
-LLM_HOST = _env("DUKAAN_LLM_HOST", "127.0.0.1")
-LLM_PORT = int(_env("DUKAAN_LLM_PORT", "8080"))
 LLM_CTX = int(_env("DUKAAN_LLM_CTX", "32768"))
 LLM_NGL = int(_env("DUKAAN_LLM_NGL", "99"))  # GPU layers (99 = fully offloaded)
 
@@ -80,12 +83,17 @@ STT_MIN_CONFIDENCE = float(_env("DUKAAN_STT_MIN_CONFIDENCE", "0.55"))
 STT_MAX_NOSPEECH = float(_env("DUKAAN_STT_MAX_NOSPEECH", "0.60"))
 
 # ------------------------------------------------------------------------- TTS
-# "mms"    -> facebook/mms-tts-hin  (open, tiny, fast — default, works out of the box)
-# "parler" -> ai4bharat/indic-parler-tts (most natural Hindi, but a GATED HF repo:
-#             needs access approval + `huggingface-cli login`, and `pip install
-#             git+https://github.com/huggingface/parler-tts.git`). tts.py falls back
-#             to "mms" automatically if the parler model/package is unavailable.
-TTS_ENGINE = _env("DUKAAN_TTS_ENGINE", "mms")
+# "veena"  -> maya-research/veena-tts (DEFAULT). A Llama-style LM that emits SNAC
+#            audio codes (decoded by hubertsiuzdak/snac_24khz). Speaks Hindi,
+#            English AND Hinglish / code-mixed text cleanly — the reason we moved
+#            off MMS, which is Devanagari-only and goes silent on Latin script.
+#            GATED HF repo: needs access + a token; pulls the `snac` package.
+# "mms"    -> facebook/mms-tts-hin (open, tiny; Devanagari-only — silent on Latin)
+# "parler" -> ai4bharat/indic-parler-tts (gated; voice set by a text description;
+#            needs `pip install parler-tts`).
+# Any engine failure degrades to "mms", then to a short silence, so a broken
+# voice path never crashes the UI.
+TTS_ENGINE = _env("DUKAAN_TTS_ENGINE", "veena")
 TTS_DEVICE = _env("DUKAAN_TTS_DEVICE", "cuda")
 MMS_MODEL = _env("DUKAAN_MMS_MODEL", "facebook/mms-tts-hin")
 PARLER_MODEL = _env("DUKAAN_PARLER_MODEL", "ai4bharat/indic-parler-tts")
@@ -94,6 +102,11 @@ PARLER_DESCRIPTION = _env(
     "Rohit speaks in a clear, warm and friendly voice at a natural pace, "
     "with very clean audio and no background noise.",
 )
+# Veena
+VEENA_MODEL = _env("DUKAAN_VEENA_MODEL", "maya-research/veena-tts")
+VEENA_SPEAKER = _env("DUKAAN_VEENA_SPEAKER", "agastya")  # kavya | agastya | maitri | vinaya
+VEENA_SNAC_MODEL = _env("DUKAAN_VEENA_SNAC", "hubertsiuzdak/snac_24khz")
+VEENA_4BIT = _flag("DUKAAN_VEENA_4BIT", False)  # 4-bit (needs bitsandbytes); else bf16
 
 # ------------------------------------------------------------------------ Gradio
 GRADIO_HOST = _env("DUKAAN_GRADIO_HOST", "0.0.0.0")
