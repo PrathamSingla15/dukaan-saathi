@@ -32,7 +32,9 @@ import modal
 
 MIN = 60
 LLM_GPU = os.environ.get("MODAL_GPU", "L4")               # LLM + vision/OCR
-SPEECH_GPU = os.environ.get("MODAL_SPEECH_GPU", "T4")     # STT + TTS, dedicated (16GB is plenty)
+SPEECH_GPU = os.environ.get("MODAL_SPEECH_GPU", "L4")     # STT + TTS, dedicated. MUST be a
+# native-bf16 GPU (Ada/Ampere) — a T4 (Turing) has no bf16, so bf16 Veena errors and 4-bit
+# Veena early-stops into truncated audio. A dedicated L4 (Ada, 24GB) runs bf16 Veena complete + fast.
 MIN_CONTAINERS = int(os.environ.get("MIN_CONTAINERS", "1"))
 CACHE = "/cache"
 LLM_REPO = os.environ.get("LLM_REPO", "ggml-org/gemma-4-12B-it-GGUF")
@@ -54,9 +56,10 @@ image = (
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
         "DUKAAN_WHISPER_DEVICE": "cuda",
         "DUKAAN_TTS_DEVICE": "cuda",
-        # 4-bit Veena (~3GB) sits fully on the dedicated T4 (no llama-server competing),
-        # so device_map="auto" keeps it on-GPU -> fast + complete (no CPU offload, no OOM).
-        "DUKAAN_VEENA_4BIT": "true",
+        # bf16 Veena on the dedicated speech L4 (Ada, native bf16, 24GB): Veena (~6GB) +
+        # Whisper (~4.5GB) run fully on-GPU -> fast AND complete. (4-bit quantization makes
+        # Veena early-stop into truncated clips; bf16 gives the full utterance.)
+        "DUKAAN_VEENA_4BIT": "false",
         "DUKAAN_DATA_DIR": "/tmp/dukaan-data",
     })
     .entrypoint([])
