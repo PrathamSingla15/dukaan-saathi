@@ -82,14 +82,15 @@ def _load_veena() -> tuple:
             log.warning("Veena 4-bit requested but unavailable (%s); using bf16.", exc)
 
     if quant is not None:
-        # Pin every layer to GPU 0. With device_map="auto", accelerate offloads
-        # layers to CPU under VRAM pressure (the llama-server holds most of the L4),
-        # giving ~3 tok/s generation that also early-stops into a truncated clip.
-        # 4-bit Veena is ~3GB and fits here alongside Whisper, so force it onto the GPU.
-        cuda_idx = 0 if dev.startswith("cuda") else dev
+        # Keep device_map="auto". On the shared L4 (llama-server + 2x Whisper fill
+        # most of the 24GB) this is the ONLY config that produces any audio: forcing
+        # Veena fully onto the GPU (device_map={"":0}) OOMs generation into SILENCE,
+        # and bf16 does too. "auto" CPU-offloads under pressure → slow + can truncate
+        # long replies, but short replies speak. The real fix is more VRAM (a bigger
+        # GPU like A100-40GB, or a separate GPU for speech) — see docs/deploy notes.
         model = AutoModelForCausalLM.from_pretrained(
             config.VEENA_MODEL, quantization_config=quant,
-            device_map={"": cuda_idx}, trust_remote_code=True)
+            device_map="auto", trust_remote_code=True)
     else:
         model = AutoModelForCausalLM.from_pretrained(
             config.VEENA_MODEL, dtype=torch.bfloat16, trust_remote_code=True).to(dev)
