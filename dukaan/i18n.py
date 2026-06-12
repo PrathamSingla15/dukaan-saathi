@@ -4,7 +4,8 @@ Provides fallback / clarification strings shown to the shop owner when STT
 fails, OCR is unclear, or the agent needs to disambiguate an entity.
 
 Design decisions:
-- Replies stay Hindi/Devanagari for now (MMS-TTS constraint; see lessons.md).
+- Replies stay Hindi/Hinglish for now (a deliberate product choice; see the
+  reply_lang_directive seam for going multilingual later).
 - Every user-facing message is bilingual: Hindi + short English safety net.
 - `lang` parameters are accepted everywhere so callers are future-proof, but
   are currently ignored beyond distinguishing hi/en family membership.
@@ -111,8 +112,8 @@ def clarify_entity(kind: str, candidates: list[str], lang: str = "") -> str:
 
 # ---------------------------------------------------------------- TTS capability seam
 
-# Only Hindi (Devanagari) is supported by the current MMS-TTS-hin model.
-# This function is a seam: when we add more TTS voices, update this set.
+# We voice only Hindi replies today (the reply language); Veena itself also speaks
+# English/Hinglish. This set is a seam: widen it when replies go multilingual.
 _SPEAKABLE_LANGS: frozenset[str] = frozenset({"hi"})
 
 

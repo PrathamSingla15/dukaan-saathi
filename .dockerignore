@@ -1,0 +1,13 @@
+# Keep the Space image (and the 1 GB git repo) lean — never ship weights/builds.
+.git
+models/
+vendor/
+data/
+logs/
+*.db
+*.wav
+*.png
+**/__pycache__/
+.venv/
+.pytest_cache/
+.env

@@ -455,7 +455,7 @@ def _outstanding_by_customer(ledger: list[dict]) -> dict[str, float]:
 
 
 if __name__ == "__main__":  # pragma: no cover - manual inspection only
-    _end = dt.date(2026, 6, 4)
+    _end = dt.date.today()
     # tiny stub catalog only so this module runs standalone; db.py passes the real one
     _stub = [{"name": "Amul Gold Milk 500ml", "category": "Dairy", "mrp": 34}]
     data = generate(_stub, _end)

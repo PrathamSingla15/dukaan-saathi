@@ -46,78 +46,76 @@ def _draft_or_template(prompt: str, system: str, fallback: str) -> str:
 
 
 # ===================================================================== festivals
+# Generic nudge for a festival we list without a specific stock hint.
+_GENERIC_HINT = "mithai, dry fruits, snacks aur gift packs"
+
+
 @lru_cache(maxsize=None)
-def _overrides_data() -> dict[str, Any]:
-    """Load festival_overrides.json once; returns empty structure on failure."""
+def _festivals_data() -> dict[str, Any]:
+    """Load the festivals dataset once; returns an empty structure on failure."""
     path: Path = config.FESTIVALS_OVERRIDES_PATH
     try:
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except Exception:
-        return {"stock_hints": {}, "extra": {}}
+        return {"stock_hints": {}, "festivals": {}}
 
 
 def _load_festivals(years: list[int]) -> list[dict]:
-    """Build a combined list of festival dicts for the given years.
+    """Festivals for the given years, each ``{"name", "date", "stock", "estimated"}``.
 
-    Each dict has ``{"name": str, "date": datetime.date, "stock": str}``.
-
-    Strategy:
-    1. Query ``holidays.India`` for each year (public + optional categories).
-    2. For each holiday name, substring-match against ``stock_hints`` keys to
-       attach a kirana stock hint.  Drop entries that have no hint (non-shopping
-       holidays like Gandhi Jayanti).
-    3. Merge the "extra" entries from festival_overrides.json — these cover
-       festivals the library misses (e.g. Karwa Chauth, New Year's Eve).
-    4. Deduplicate by (date, name) keeping the first occurrence.
+    Primary source is the verified vendored dataset (``festival_overrides.json``,
+    2026-2030, dates checked against drikpanchang). EVERY listed festival is
+    surfaced with its kirana stock hint — nothing is dropped. For any requested
+    year the dataset does not cover (e.g. beyond 2030) we fall back to
+    ``holidays.India`` (public + optional), keeping only entries that match a
+    known stock hint so the calendar keeps working into the future.
     """
-    overrides = _overrides_data()
-    stock_hints: dict[str, str] = overrides.get("stock_hints", {})
-    extra_by_year: dict[str, list[dict]] = overrides.get("extra", {})
+    data = _festivals_data()
+    hints: dict[str, str] = data.get("stock_hints", {})
+    catalog: dict[str, dict] = data.get("festivals", {})
 
     result: list[dict] = []
     seen: set[tuple[dt.date, str]] = set()
+    covered: set[int] = set()
+    want = set(years)
 
-    def _add(name: str, date: dt.date, stock: str) -> None:
+    def _add(name: str, date: dt.date, stock: str, estimated: bool = False) -> None:
         key = (date, name)
         if key in seen:
             return
         seen.add(key)
-        result.append({"name": name, "date": date, "stock": stock})
+        result.append({"name": name, "date": date,
+                       "stock": stock or _GENERIC_HINT, "estimated": estimated})
 
-    for year in years:
-        # 1+2: holidays library -> keep only those with a stock hint
+    # 1) verified vendored dataset — show every festival, hint or not
+    for name, info in catalog.items():
+        stock = hints.get(info.get("hint", ""), _GENERIC_HINT)
+        estimated = bool(info.get("estimated"))
+        for iso in info.get("dates", []):
+            try:
+                d = dt.date.fromisoformat(iso)
+            except (TypeError, ValueError):
+                continue
+            if d.year in want:
+                covered.add(d.year)
+                _add(name, d, stock, estimated)
+
+    # 2) fallback for any uncovered year (beyond the dataset): library holidays
+    #    that match a stock hint (drops civic-only days like Gandhi Jayanti).
+    for year in want - covered:
         try:
-            india_holidays = holidays.India(
-                years=year, categories=("public", "optional")
-            )
+            india_holidays = holidays.India(years=year, categories=("public", "optional"))
         except Exception:
             india_holidays = {}
-
         for hdate, hname in india_holidays.items():
-            # A single date may carry multiple holiday names joined with "; "
             for part in hname.split(";"):
                 part_lower = part.strip().lower()
-                matched_hint: str | None = None
-                for kw, hint in stock_hints.items():
+                for kw, hint in hints.items():
                     if kw in part_lower:
-                        matched_hint = hint
+                        _add(part.strip(), hdate, hint)
                         break
-                if matched_hint is not None:
-                    _add(part.strip(), hdate, matched_hint)
 
-        # 3: merge extra entries for this year
-        for entry in extra_by_year.get(str(year), []):
-            try:
-                edate = dt.date.fromisoformat(entry["date"])
-            except (KeyError, ValueError):
-                continue
-            ename = entry.get("name", "")
-            estock = entry.get("stock", "")
-            if ename and estock:
-                _add(ename, edate, estock)
-
-    # Sort chronologically
     result.sort(key=lambda f: f["date"])
     return result
 
@@ -275,6 +273,8 @@ def festival_nudge(today: dt.date | str | None = None) -> dict:
         "kal" if days_away == 1 else f"{days_away} din me")
     fallback = (f"🎉 {name} {when} hai! Pehle se stock kar lein: {stock_hint}. "
                 "Tyohaar par maang badhti hai.")
+    if fest.get("estimated"):
+        fallback += " (Tareekh chaand ke hisaab se 1 din aage-peeche ho sakti hai.)"
     system = ("Tum ek experienced kirana dukaan salahkaar ho jo dukaandaar ko "
               "tyohaar se pehle sahi saaman stock karne ki salah dete ho, Hindi me.")
     message = _draft_or_template(

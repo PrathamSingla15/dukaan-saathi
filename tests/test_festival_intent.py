@@ -13,33 +13,45 @@ import dukaan.proactive as P
 
 
 # ---------------------------------------------------------------- festival calendar
-def test_festival_finds_diwali_2026():
-    """Diwali 2026 is Nov 8; from Nov 1 it is 7 days away — within 30-day lookahead."""
-    n = P.festival_nudge(dt.date(2026, 11, 1))
+def test_festival_finds_dhanteras_2026():
+    """The comprehensive calendar now surfaces the whole Diwali cluster — from
+    Nov 3 2026, Dhanteras (Nov 6) is the nearest festival. It was missing entirely
+    from the old library-only calendar."""
+    n = P.festival_nudge(dt.date(2026, 11, 3))
     assert n["festival"] is not None
-    assert n["days_away"] is not None
+    assert n["festival"]["name"] == "Dhanteras"
+    assert n["days_away"] == 3
     assert n["message"]
 
 
-def test_festival_finds_karwa_chauth():
-    """Karwa Chauth 2026 (Oct 29) is in the extra overrides; visible from Oct 25."""
+def test_festival_finds_karwa_chauth_2026():
+    """Karwa Chauth 2026 (Oct 29) is visible from Oct 25 — 4 days away."""
     n = P.festival_nudge(dt.date(2026, 10, 25))
     assert n["festival"] is not None
-    assert n["message"]
+    assert n["festival"]["name"] == "Karwa Chauth"
+    assert n["days_away"] == 4
 
 
-def test_festival_works_beyond_2026():
-    """Calendar must work for 2027 — proves it is NOT hardcoded to 2026.
-
-    Diwali 2027 is Oct 29; from Oct 20 it is 9 days away.
-    """
-    n = P.festival_nudge(dt.date(2027, 10, 20))
+def test_festival_works_2028():
+    """Dataset covers 2028 (beyond the old 2026/2027 hardcode): from Oct 13 2028,
+    Dhanteras (Oct 15) is the nearest festival — proves it is NOT hardcoded."""
+    n = P.festival_nudge(dt.date(2028, 10, 13))
     assert n["festival"] is not None
+    assert n["festival"]["name"] == "Dhanteras"
+
+
+def test_festival_estimated_eid_flagged():
+    """Eid is moon-sighting dependent → surfaces AND is flagged estimated.
+    Eid-ul-Fitr 2026 is Mar 20; from Mar 16 it is 4 days away."""
+    n = P.festival_nudge(dt.date(2026, 3, 16))
+    assert n["festival"] is not None
+    assert n["festival"]["name"].startswith("Eid")
+    assert n["festival"].get("estimated") is True
 
 
 def test_no_festival_far_out():
-    """When no festival falls within the 30-day window the nudge returns
-    festival=None but message is always a non-empty string."""
+    """A genuine gap: from 2026-06-01 nothing falls within the 30-day window →
+    festival=None, but message is always a non-empty string."""
     n = P.festival_nudge(dt.date(2026, 6, 1))
     assert n["festival"] is None
     assert isinstance(n["message"], str) and len(n["message"]) > 0

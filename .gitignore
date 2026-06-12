@@ -14,8 +14,6 @@ venv/
 /logs/
 *.log
 *.wav
-*.db
-*.db-journal
 
 # Local env & secrets (.env.example IS committed)
 .env

@@ -21,7 +21,7 @@ Design notes
   Heavy models load lazily inside those modules — nothing ML at import time.
 - English is the default chrome; the toggle flips every label to Hindi instantly
   (client-side). The *assistant's replies* stay Hindi — that is the backend's
-  voice today (MMS-TTS / prompt constraint), surfaced intentionally.
+  voice today (a deliberate Hindi-first prompt choice), surfaced intentionally.
 """
 
 from __future__ import annotations

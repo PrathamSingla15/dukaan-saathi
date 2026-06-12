@@ -1,20 +1,15 @@
 """Text-to-speech for Dukaan Saathi — closes the voice loop.
 
-Three engines, all ffmpeg-free, returning ``(sampling_rate, np.ndarray float32)``
-ready to hand straight to ``gr.Audio(type="numpy")``:
+Single engine: **Veena** (``maya-research/veena-tts``, GATED) — a Llama-style LM
+that emits SNAC audio codes (decoded by ``hubertsiuzdak/snac_24khz``). It speaks
+Hindi, English AND Hinglish / code-mixed text. Needs HF access + a token and the
+``snac`` package. Returns ``(sampling_rate, np.ndarray float32)`` ready to hand
+straight to ``gr.Audio(type="numpy")``.
 
-* **veena** (default, GATED) — ``maya-research/veena-tts``, a Llama-style LM that
-  emits SNAC audio codes (decoded by ``hubertsiuzdak/snac_24khz``). Speaks Hindi,
-  English AND Hinglish / code-mixed text — the reason we moved off MMS. Needs HF
-  access + a token and the ``snac`` package.
-* **mms** (open) — ``facebook/mms-tts-hin`` via transformers' VITS. Tiny and fast
-  but Devanagari-only: it goes silent on romanized / Latin-script text.
-* **parler** (optional, GATED) — ``ai4bharat/indic-parler-tts``; voice set by a
-  free-text description. Needs the ``parler-tts`` package.
-
-Any engine failure degrades to **mms**, then to a short silence. Nothing heavy is
-imported or loaded at import time — models load lazily on first synthesis and are
-cached in module globals, so the Gradio UI never crashes on the voice path.
+Nothing heavy is imported or loaded at import time — the model loads lazily on
+first synthesis and is cached in a module global. Any synthesis failure (or empty
+input) degrades to a short silence, so the Gradio UI never crashes on the voice
+path.
 """
 
 from __future__ import annotations
@@ -29,9 +24,7 @@ from dukaan import config, numwords
 
 log = logging.getLogger("dukaan.tts")
 
-# Module-level model caches, populated lazily by the loaders below.
-_MMS: tuple | None = None        # (model, tokenizer, sampling_rate)
-_PARLER: tuple | None = None     # (model, tokenizer, description_tokenizer, sampling_rate)
+# Module-level model cache, populated lazily by the loader below.
 _VEENA: tuple | None = None      # (model, tokenizer, snac_model)
 
 # Returned on any failure / empty input so callers always get valid audio.
@@ -58,102 +51,14 @@ def _device() -> str:
     return dev
 
 
-# ----------------------------------------------------------------------- loaders
-def _load_mms() -> tuple:
-    """Load + cache the MMS-TTS VITS model and tokenizer. Falls back to CPU."""
-    global _MMS
-    if _MMS is not None:
-        return _MMS
-
-    from transformers import AutoTokenizer, VitsModel
-
-    tok = AutoTokenizer.from_pretrained(config.MMS_MODEL)
-    model = VitsModel.from_pretrained(config.MMS_MODEL)
-    try:
-        model = model.to(_device())
-    except Exception as exc:  # e.g. CUDA OOM / driver mismatch
-        log.warning("MMS to(%s) failed (%s); using cpu.", _device(), exc)
-        model = model.to("cpu")
-    model.eval()
-    _MMS = (model, tok, int(model.config.sampling_rate))
-    return _MMS
-
-
-def _load_parler() -> tuple:
-    """Load + cache Parler-TTS (lazy, gated).
-
-    Raises on missing package or load failure so :func:`synthesize` can fall
-    back to MMS — we deliberately do not swallow the error here.
-    """
-    global _PARLER
-    if _PARLER is not None:
-        return _PARLER
-
-    from parler_tts import ParlerTTSForConditionalGeneration  # may raise ImportError
-    from transformers import AutoTokenizer
-
-    dev = _device()
-    model = ParlerTTSForConditionalGeneration.from_pretrained(config.PARLER_MODEL).to(dev)
-    model.eval()
-    # Parler uses two tokenizers: a text one for the prompt and (sometimes a
-    # separate) one for the speaker description; the same repo serves both.
-    tok = AutoTokenizer.from_pretrained(config.PARLER_MODEL)
-    desc_name = getattr(model.config, "text_encoder", None)
-    desc_name = getattr(desc_name, "_name_or_path", None) or config.PARLER_MODEL
-    try:
-        desc_tok = AutoTokenizer.from_pretrained(desc_name)
-    except Exception:
-        desc_tok = tok
-    sr = int(model.config.sampling_rate)
-    _PARLER = (model, tok, desc_tok, sr)
-    return _PARLER
-
-
-# -------------------------------------------------------------------- synthesis
-def _synth_mms(text: str) -> tuple[int, np.ndarray]:
-    model, tok, sr = _load_mms()
-    dev = next(model.parameters()).device
-    inputs = tok(text, return_tensors="pt").to(dev)
-    # MMS-Hindi has a Devanagari-only vocab (72 tokens, 0 Latin): romanized /
-    # Hinglish (or otherwise non-Devanagari) text tokenizes to ZERO tokens, which
-    # makes VITS' relative-position attention run pad(..., length-1) with length=0
-    # and raise "narrow(): length must be non-negative". Guard it: skip synthesis
-    # and return silence rather than crash (Devanagari and mixed text are fine —
-    # mixed speaks its Devanagari portion). Full Hinglish TTS would need a
-    # romanized→Devanagari transliterator (e.g. ai4bharat IndicXlit); rule-based
-    # schemes (ITRANS/HK) garble it, so we deliberately don't.
-    if inputs["input_ids"].shape[-1] == 0:
-        log.debug("MMS: no Devanagari tokens in %r — returning silence.", text[:60])
-        return _SILENCE
-    with torch.no_grad():
-        wav = model(**inputs).waveform
-    wav = wav.squeeze().float().cpu().numpy().astype(np.float32, copy=False)
-    return sr, np.atleast_1d(wav)
-
-
-def _synth_parler(text: str) -> tuple[int, np.ndarray]:
-    model, tok, desc_tok, sr = _load_parler()
-    dev = next(model.parameters()).device
-    desc_ids = desc_tok(config.PARLER_DESCRIPTION, return_tensors="pt").to(dev)
-    prompt_ids = tok(text, return_tensors="pt").to(dev)
-    with torch.no_grad():
-        wav = model.generate(
-            input_ids=desc_ids.input_ids,
-            attention_mask=getattr(desc_ids, "attention_mask", None),
-            prompt_input_ids=prompt_ids.input_ids,
-            prompt_attention_mask=getattr(prompt_ids, "attention_mask", None),
-        )
-    wav = wav.squeeze().float().cpu().numpy().astype(np.float32, copy=False)
-    return sr, np.atleast_1d(wav)
-
-
+# ----------------------------------------------------------------- load + decode
 def _load_veena() -> tuple:
     """Load + cache Veena (the LM) and the SNAC decoder.
 
     bf16 by default (~6 GB, fine on the shared GPU); set ``DUKAAN_VEENA_4BIT=1``
     for a ~2-3 GB 4-bit load (needs ``bitsandbytes`` + ``accelerate``). Falls back
     to bf16 if 4-bit deps are missing. Raises on failure so :func:`synthesize`
-    can fall back to MMS — we don't swallow the error here.
+    returns a short silence instead — we don't swallow the error here.
     """
     global _VEENA
     if _VEENA is not None:
@@ -300,7 +205,7 @@ def _synth_veena(text: str, speaker: str | None = None) -> tuple[int, np.ndarray
 
 
 def _clean_for_tts(text: str) -> str:
-    """Strip markdown and voice numbers/``₹`` as Hindi words (MMS can't speak digits)."""
+    """Strip markdown and voice numbers / ``₹`` as Hindi words (clearer in speech)."""
     t = re.sub(r"[*_`#>]+", " ", text)
     t = re.sub(r"(?m)^\s*[-•]\s*", "", t)
     t = t.replace("|", " ").replace("—", " ")
@@ -308,66 +213,29 @@ def _clean_for_tts(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def synthesize(text: str, engine: str | None = None) -> tuple[int, np.ndarray]:
-    """Speak ``text`` → ``(sampling_rate, waveform float32)``.
+# ------------------------------------------------------------------- public API
+def synthesize(text: str) -> tuple[int, np.ndarray]:
+    """Speak ``text`` with Veena → ``(sampling_rate, waveform float32)``.
 
-    ``engine`` defaults to :data:`config.TTS_ENGINE` ("veena"). The selected
-    engine is tried first and silently falls back to ``"mms"`` if unavailable;
-    empty text yields a short silence and *any* failure yields ``(16000, zeros)``
-    so the UI never crashes on audio playback. Note "veena" speaks Hindi / English
-    / Hinglish, while "mms" is Devanagari-only (silent on Latin-script text).
+    Veena speaks Hindi / English / Hinglish. Empty text yields a short silence, and
+    *any* failure yields ``(16000, zeros)`` so the UI never crashes on playback.
     """
     if text is None or not text.strip():
         return _SILENCE
-
     text = _clean_for_tts(text.strip())
     if not text:
         return _SILENCE
-    engine = (engine or config.TTS_ENGINE or "mms").lower()
-
-    if engine == "veena":
-        try:
-            return _synth_veena(text)
-        except Exception as exc:
-            log.warning("Veena TTS unavailable (%s); falling back to mms.", exc)
-            engine = "mms"
-
-    if engine == "parler":
-        try:
-            return _synth_parler(text)
-        except Exception as exc:
-            log.warning("Parler TTS unavailable (%s); falling back to mms.", exc)
-            engine = "mms"
-
     try:
-        return _synth_mms(text)
-    except Exception as exc:
-        log.exception("MMS TTS failed (%s); returning silence.", exc)
+        return _synth_veena(text)
+    except Exception as exc:  # noqa: BLE001 — never break the UI on the voice path
+        log.warning("Veena TTS failed (%s); returning silence.", exc)
         return _SILENCE
 
 
-# ----------------------------------------------------------------------- warmup
-def warmup(engine: str | None = None) -> None:
-    """Pre-load the chosen engine's model so the first real call is fast.
-
-    Never raises: a warm-up failure (e.g. a gated model) is logged, and for the
-    heavier engines (veena / parler) we fall back to warming MMS so synthesis
-    stays responsive.
-    """
-    engine = (engine or config.TTS_ENGINE or "mms").lower()
+def warmup() -> None:
+    """Pre-load Veena so the first real call isn't slow. Never raises."""
     try:
-        if engine == "veena":
-            _load_veena()
-        elif engine == "parler":
-            _load_parler()
-        else:
-            _load_mms()
-        log.info("TTS warmup complete (engine=%s).", engine)
-    except Exception as exc:
-        log.warning("TTS warmup for engine=%s failed (%s).", engine, exc)
-        if engine in ("veena", "parler"):
-            try:
-                _load_mms()
-                log.info("TTS warmup fell back to mms.")
-            except Exception as exc2:
-                log.warning("TTS mms warmup also failed (%s).", exc2)
+        _load_veena()
+        log.info("TTS warmup complete (veena).")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Veena TTS warmup failed (%s).", exc)

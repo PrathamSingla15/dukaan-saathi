@@ -4,14 +4,13 @@
 #
 #   - Gemma-4-12B-it Q8_0 GGUF + vision mmproj  -> models/gemma4/  (llama.cpp)
 #   - faster-whisper large-v3                   -> HF cache        (STT)
-#   - maya-research/veena-tts + snac_24khz      -> HF cache        (TTS, DEFAULT)
-#   - facebook/mms-tts-hin                      -> HF cache        (TTS fallback)
+#   - vasista22-whisper-hindi (ct2-int8)        -> HF cache        (STT Hindi 2nd pass)
+#   - maya-research/veena-tts + snac_24khz      -> HF cache        (TTS)
 #
-# NOTE: Veena (the default voice — speaks Hindi/English/Hinglish) is a GATED HF
-# repo. `huggingface-cli login` with an authorized token (or set HF_TOKEN) BEFORE
-# running this. Without access the veena download is skipped and the app falls
-# back to MMS (Devanagari-only). ai4bharat/indic-parler-tts is another gated
-# option: `uv pip install parler-tts` and run with DUKAAN_TTS_ENGINE=parler.
+# NOTE: Veena (the voice — speaks Hindi/English/Hinglish) is a GATED HF repo.
+# `huggingface-cli login` with an authorized token (or set HF_TOKEN) BEFORE
+# running this. Without access the veena download is skipped and the app's voice
+# replies stay silent until a token with access is provided.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -29,21 +28,19 @@ for fname in ("gemma-4-12B-it-Q8_0.gguf", "mmproj-gemma-4-12B-it-Q8_0.gguf"):
     path = hf_hub_download(repo_id=gemma_repo, filename=fname, local_dir=gemma_dir)
     print(f"  [gemma]   {fname} -> {path}")
 
-# ---- faster-whisper large-v3 (STT) -> default HF cache ----
+# ---- faster-whisper large-v3 + Hindi 2nd-pass (STT) -> default HF cache ----
 wpath = snapshot_download(repo_id="Systran/faster-whisper-large-v3")
-print(f"  [whisper] Systran/faster-whisper-large-v3 -> {wpath}")
+print(f"  [whisper]    Systran/faster-whisper-large-v3 -> {wpath}")
+hpath = snapshot_download(repo_id="digikar/vasista22-whisper-hindi-large-v2-ct2-int8")
+print(f"  [whisper-hi] vasista22-whisper-hindi (ct2-int8) -> {hpath}")
 
 # ---- Veena (DEFAULT TTS) + its SNAC decoder -> default HF cache (GATED) ----
 for repo in ("maya-research/veena-tts", "hubertsiuzdak/snac_24khz"):
     try:
         vpath = snapshot_download(repo_id=repo)
         print(f"  [veena]   {repo} -> {vpath}")
-    except Exception as e:  # gated / not logged in — app will fall back to MMS
+    except Exception as e:  # gated / not logged in — voice stays silent until access
         print(f"  [veena]   SKIP {repo}: {type(e).__name__} — login with an authorized token to enable Veena.")
-
-# ---- facebook/mms-tts-hin (TTS fallback) -> default HF cache ----
-tpath = snapshot_download(repo_id="facebook/mms-tts-hin")
-print(f"  [tts]     facebook/mms-tts-hin -> {tpath}")
 
 print("[download_models] done.")
 PY

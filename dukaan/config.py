@@ -83,26 +83,11 @@ STT_MIN_CONFIDENCE = float(_env("DUKAAN_STT_MIN_CONFIDENCE", "0.55"))
 STT_MAX_NOSPEECH = float(_env("DUKAAN_STT_MAX_NOSPEECH", "0.60"))
 
 # ------------------------------------------------------------------------- TTS
-# "veena"  -> maya-research/veena-tts (DEFAULT). A Llama-style LM that emits SNAC
-#            audio codes (decoded by hubertsiuzdak/snac_24khz). Speaks Hindi,
-#            English AND Hinglish / code-mixed text cleanly — the reason we moved
-#            off MMS, which is Devanagari-only and goes silent on Latin script.
-#            GATED HF repo: needs access + a token; pulls the `snac` package.
-# "mms"    -> facebook/mms-tts-hin (open, tiny; Devanagari-only — silent on Latin)
-# "parler" -> ai4bharat/indic-parler-tts (gated; voice set by a text description;
-#            needs `pip install parler-tts`).
-# Any engine failure degrades to "mms", then to a short silence, so a broken
-# voice path never crashes the UI.
-TTS_ENGINE = _env("DUKAAN_TTS_ENGINE", "veena")
+# Veena (maya-research/veena-tts) — a Llama-style LM that emits SNAC audio codes
+# (decoded by hubertsiuzdak/snac_24khz). Speaks Hindi, English AND Hinglish /
+# code-mixed text. GATED HF repo: needs access + a token; pulls the `snac` package.
+# A synthesis failure degrades to a short silence, so the voice path never crashes.
 TTS_DEVICE = _env("DUKAAN_TTS_DEVICE", "cuda")
-MMS_MODEL = _env("DUKAAN_MMS_MODEL", "facebook/mms-tts-hin")
-PARLER_MODEL = _env("DUKAAN_PARLER_MODEL", "ai4bharat/indic-parler-tts")
-PARLER_DESCRIPTION = _env(
-    "DUKAAN_PARLER_DESC",
-    "Rohit speaks in a clear, warm and friendly voice at a natural pace, "
-    "with very clean audio and no background noise.",
-)
-# Veena
 VEENA_MODEL = _env("DUKAAN_VEENA_MODEL", "maya-research/veena-tts")
 VEENA_SPEAKER = _env("DUKAAN_VEENA_SPEAKER", "agastya")  # kavya | agastya | maitri | vinaya
 VEENA_SNAC_MODEL = _env("DUKAAN_VEENA_SNAC", "hubertsiuzdak/snac_24khz")

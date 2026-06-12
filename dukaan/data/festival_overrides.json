@@ -1,45 +1,58 @@
 {
+  "_comment": "Verified Indian festival calendar 2026-2030 for the kirana stock-up nudge. Dates checked against drikpanchang.com (New Delhi / IST). Muslim festivals (estimated:true) are moon-sighting dependent (+/-1 day). proactive.py surfaces EVERY listed festival and falls back to holidays.India for years not listed here. Extend with more years/festivals by adding ISO dates below.",
   "stock_hints": {
-    "makar sankranti": "til-gud, laddoo, peanuts, khichdi raashan, patang/manjha",
-    "republic day": "tiranga jhande, mithai, snacks, cold drinks, chocolates",
-    "holi": "gulaal/colours, pichkari, gujiya & mithai, cold drinks, namkeen, dry fruits",
-    "eid": "sewai/vermicelli, dry fruits, sugar, ghee, dates (khajoor), milk",
+    "makar sankranti": "til-gud, laddoo, peanuts, gajak/chikki, khichdi raashan, patang/manjha",
+    "vasant panchami": "besan/boondi laddoo, kesar, yellow mithai, fruits, puja samagri",
+    "maha shivratri": "vrat items (kuttu/singhara atta, sabudana, sendha namak), milk, fruits, dry fruits, thandai",
+    "holika dahan": "gujiya & mithai, dry fruits, popcorn/peanuts, nariyal, puja samagri",
+    "holi": "gulaal/colours, pichkari, gujiya & mithai, thandai, cold drinks, namkeen, dry fruits",
     "ram navami": "vrat items (kuttu/singhara atta, sabudana, sendha namak), fruits, panjiri, mithai",
+    "hanuman jayanti": "boondi laddoo, prasad items, sindoor, fruits, puja samagri",
+    "akshaya tritiya": "mithai, dry fruits, gift packs, puja samagri (subh kharidari ka din - bheed zyada)",
     "raksha bandhan": "rakhi, mithai, chocolates, dry fruits, gift packs",
     "janmashtami": "makhan-mishri, dahi, dry fruits, panjiri, fruits, vrat items",
-    "ganesh chaturthi": "modak/mithai, dry fruits, nariyal, puja samagri",
+    "ganesh chaturthi": "modak/mithai, dry fruits, nariyal, durva, puja samagri",
     "navratri": "vrat items (kuttu/singhara atta, sabudana, sendha namak), fruits, dry fruits, ghee, mithai",
     "dussehra": "mithai, dry fruits, snacks, cold drinks, gift packs",
-    "karwa chauth": "sargi items (dry fruits, mathri, feni, fruits), mithai, sewai, gifts",
-    "diwali": "diye, candles, mithai, dry fruits, gift packs, namkeen, cold drinks, phuljhadi",
-    "deepavali": "diye, candles, mithai, dry fruits, gift packs, namkeen, cold drinks, phuljhadi",
+    "karwa chauth": "sargi items (dry fruits, mathri, feni, fruits), mithai, sewai, mehndi, gifts",
+    "ahoi ashtami": "vrat items, dry fruits, fruits, mithai, puja samagri",
+    "dhanteras": "steel/utensils, jhaadu, diye, dhania, mithai, dry fruits, gift packs (badi kharidari)",
+    "naraka chaturdashi": "diye, candles, ubtan, mithai, namkeen, phuljhadi",
+    "diwali": "diye, candles, mithai, dry fruits, gift packs, namkeen, cold drinks, phuljhadi, Lakshmi-Ganesh murti",
+    "govardhan puja": "mithai, milk products, annakut raashan, dry fruits, puja samagri",
+    "bhai dooj": "mithai, dry fruits, chocolates, gift packs, roli-chawal",
+    "chhath": "thekua saamaan (atta, gud, ghee), kela/nariyal/ganna, soop-daura, diye",
+    "guru nanak jayanti": "kada prasad (atta, ghee, cheeni), langar raashan, mithai, fruits",
+    "eid": "sewai/vermicelli, dry fruits, cheeni, ghee, khajoor, doodh, attar",
     "christmas": "cake & cake mix, chocolates, candles, dry fruits, snacks, gift packs",
-    "new year": "snacks/namkeen, cold drinks, chocolates, sweets, gift packs, party items"
+    "new year": "namkeen/snacks, cold drinks, chocolates, mithai, gift packs, party items"
   },
-  "extra": {
-    "2026": [
-      {
-        "name": "Karwa Chauth",
-        "date": "2026-10-29",
-        "stock": "sargi items (dry fruits, mathri, feni, fruits), mithai, sewai, gifts"
-      },
-      {
-        "name": "New Year's Eve",
-        "date": "2026-12-31",
-        "stock": "snacks/namkeen, cold drinks, chocolates, sweets, gift packs, party items"
-      }
-    ],
-    "2027": [
-      {
-        "name": "Karwa Chauth",
-        "date": "2027-11-07",
-        "stock": "sargi items (dry fruits, mathri, feni, fruits), mithai, sewai, gifts"
-      },
-      {
-        "name": "New Year's Eve",
-        "date": "2027-12-31",
-        "stock": "snacks/namkeen, cold drinks, chocolates, sweets, gift packs, party items"
-      }
-    ]
+  "festivals": {
+    "Makar Sankranti": {"hint": "makar sankranti", "dates": ["2026-01-14", "2027-01-15", "2028-01-15", "2029-01-14", "2030-01-14"]},
+    "Vasant Panchami": {"hint": "vasant panchami", "dates": ["2026-01-23", "2027-02-11", "2028-01-31", "2029-01-19", "2030-02-07"]},
+    "Maha Shivratri": {"hint": "maha shivratri", "dates": ["2026-02-15", "2027-03-06", "2028-02-23", "2029-02-11", "2030-03-02"]},
+    "Holika Dahan": {"hint": "holika dahan", "dates": ["2026-03-03", "2027-03-21", "2028-03-10", "2029-02-28", "2030-03-19"]},
+    "Holi": {"hint": "holi", "dates": ["2026-03-04", "2027-03-22", "2028-03-11", "2029-03-01", "2030-03-20"]},
+    "Eid-ul-Fitr": {"hint": "eid", "estimated": true, "dates": ["2026-03-20", "2027-03-10", "2028-02-27", "2029-02-15", "2030-02-05"]},
+    "Ram Navami": {"hint": "ram navami", "dates": ["2026-03-26", "2027-04-15", "2028-04-03", "2029-04-23", "2030-04-12"]},
+    "Hanuman Jayanti": {"hint": "hanuman jayanti", "dates": ["2026-04-02", "2027-04-20", "2028-04-09", "2029-04-28", "2030-04-18"]},
+    "Akshaya Tritiya": {"hint": "akshaya tritiya", "dates": ["2026-04-19", "2027-05-09", "2028-04-27", "2029-05-16", "2030-05-05"]},
+    "Eid-ul-Adha (Bakrid)": {"hint": "eid", "estimated": true, "dates": ["2026-05-27", "2027-05-17", "2028-05-05", "2029-04-24", "2030-04-14"]},
+    "Raksha Bandhan": {"hint": "raksha bandhan", "dates": ["2026-08-28", "2027-08-17", "2028-08-05", "2029-08-23", "2030-08-13"]},
+    "Janmashtami": {"hint": "janmashtami", "dates": ["2026-09-04", "2027-08-25", "2028-08-13", "2029-09-01", "2030-08-21"]},
+    "Ganesh Chaturthi": {"hint": "ganesh chaturthi", "dates": ["2026-09-14", "2027-09-04", "2028-08-23", "2029-09-11", "2030-09-01"]},
+    "Navratri": {"hint": "navratri", "dates": ["2026-10-11", "2027-09-30", "2028-09-19", "2029-10-08", "2030-09-28"]},
+    "Dussehra": {"hint": "dussehra", "dates": ["2026-10-20", "2027-10-09", "2028-09-27", "2029-10-16", "2030-10-06"]},
+    "Karwa Chauth": {"hint": "karwa chauth", "dates": ["2026-10-29", "2027-10-18", "2028-10-07", "2029-10-26", "2030-10-15"]},
+    "Ahoi Ashtami": {"hint": "ahoi ashtami", "dates": ["2026-11-01", "2027-10-22", "2028-10-11", "2029-10-30", "2030-10-19"]},
+    "Dhanteras": {"hint": "dhanteras", "dates": ["2026-11-06", "2027-10-27", "2028-10-15", "2029-11-04", "2030-10-24"]},
+    "Naraka Chaturdashi (Choti Diwali)": {"hint": "naraka chaturdashi", "dates": ["2027-10-28", "2028-10-16"]},
+    "Diwali": {"hint": "diwali", "dates": ["2026-11-08", "2027-10-29", "2028-10-17", "2029-11-05", "2030-10-26"]},
+    "Govardhan Puja": {"hint": "govardhan puja", "dates": ["2026-11-10", "2027-10-30", "2028-10-18", "2029-11-06", "2030-10-27"]},
+    "Bhai Dooj": {"hint": "bhai dooj", "dates": ["2026-11-11", "2027-10-31", "2028-10-19", "2029-11-07", "2030-10-28"]},
+    "Chhath Puja": {"hint": "chhath", "dates": ["2026-11-15", "2027-11-04", "2028-10-23", "2029-11-11", "2030-11-01"]},
+    "Guru Nanak Jayanti": {"hint": "guru nanak jayanti", "dates": ["2026-11-24", "2027-11-14", "2028-11-02", "2029-11-21", "2030-11-10"]},
+    "Christmas": {"hint": "christmas", "dates": ["2026-12-25", "2027-12-25", "2028-12-25", "2029-12-25", "2030-12-25"]},
+    "New Year": {"hint": "new year", "dates": ["2026-01-01", "2027-01-01", "2028-01-01", "2029-01-01", "2030-01-01"]}
   }
 }

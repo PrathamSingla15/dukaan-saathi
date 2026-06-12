@@ -1,8 +1,8 @@
 """Spoken Hindi numbers.
 
-MMS-TTS-hin cannot pronounce Latin digits ("528" comes out garbled), so before
-synthesis we convert ₹-amounts and bare numbers into Devanagari number words
-("₹528" → "पाँच सौ अट्ठाईस रुपये"). Indian numbering (हज़ार / लाख / करोड़).
+TTS voices the reply more naturally from Hindi number-words than from raw Latin
+digits, so before synthesis we convert ₹-amounts and bare numbers into Devanagari
+number words ("₹528" → "पाँच सौ अट्ठाईस रुपये"). Indian numbering (हज़ार / लाख / करोड़).
 """
 
 from __future__ import annotations

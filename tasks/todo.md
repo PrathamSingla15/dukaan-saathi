@@ -1,3 +1,19 @@
+# 🏁 Hackathon submission sprint (Jun 11–15) 🔄 ACTIVE
+
+Single source of truth: `docs/hackathon-scorecard.md`. Backend + UI are DONE; this sprint ships the **required artifacts** (Space, video, social) and chases badges + the Modal track.
+
+**Day 1 — live Space on Modal (blocker):**
+- [ ] Confirm `build-small-hackathon` org access; reserve Space name
+- [ ] `modal deploy scripts/modal_llama.py` (Gemma first) → get `*.modal.run/v1` URL
+- [ ] HF Space (Docker, **T4**): Gradio+STT+TTS; secret DUKAAN_LLM_BASE_URL=Modal URL; HF_TOKEN; DUKAAN_DATA_DIR=/data (+Small persistent)
+- [ ] Seed + smoke-test live
+
+**Day 2 — demo + model A/B:** onboard real shopkeeper → film 2–3 min Hindi demo → upload · A/B MiniCPM-V 4.6 vs Gemma → pick flagship · stand up MiniCPM-V variant (OpenBMB + Tiny Titan)
+**Day 3 — badges + blog:** share agent trace (Sharing-is-Caring) · publish HF blog (Field Notes) · screenshots (Best Agent, Off-Brand)
+**Day 4 — submit:** /submit (Backyard AI + Modal + OpenBMB + Tiny Titan + badges) · social post (@huggingface @gradio @modal) · submit before deadline
+
+---
+
 # Dukaan Saathi — Track‑1 revision implementation (backend) 🔄 IN PROGRESS
 
 Plan: /home/shivank_g/.claude/plans/hey-now-create-the-linked-otter.md
