@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -167,6 +168,17 @@ def expiry_watcher() -> dict:
 
 
 # =============================================================== udhaar reminder
+# Khata names carry a trailing "(locality)" tag the owner uses to tell customers
+# apart (e.g. "Rakesh Sharma (Gali No. 4)"). That identifier is for the owner, not
+# the customer, so we strip it before addressing anyone in a WhatsApp reminder.
+_LOC_TAG_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _greeting_name(name: str) -> str:
+    """The customer's name with the owner's private locality tag removed."""
+    return _LOC_TAG_RE.sub("", name or "").strip() or (name or "")
+
+
 def _reminder_prompt(name: str, balance: float, earliest_due: str | None) -> str:
     due = f" (due date {earliest_due})" if earliest_due else ""
     return (
@@ -191,10 +203,11 @@ def draft_reminder(name: str, balance: float, phone: str | None = None,
     inside :func:`udhaar_reminder`.
     """
     bal = round(float(balance or 0), 2)
-    fallback = (f"नमस्ते {name} जी, आपका {_money(bal)} उधार बाकी है, "
+    clean = _greeting_name(name)  # address the customer by name, not the owner's locality tag
+    fallback = (f"नमस्ते {clean} जी, आपका {_money(bal)} उधार बाकी है, "
                 "कृपया सुविधा अनुसार दे दें। धन्यवाद — दुकान")
     draft = _draft_or_template(
-        _reminder_prompt(name, bal, earliest_due), _REMINDER_SYSTEM, fallback)
+        _reminder_prompt(clean, bal, earliest_due), _REMINDER_SYSTEM, fallback)
     return {"customer": name, "balance": bal, "phone": phone, "draft": draft}
 
 

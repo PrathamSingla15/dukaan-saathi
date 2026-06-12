@@ -41,46 +41,50 @@ from typing import Optional
 
 
 # ====================================================================== customers
-# The store's regulars: ~35 households/shopkeepers the kirana knows by name. Names
-# carry the usual mohalla honorifics (ji / bhai / aunty / babu / garu / didi).
-# ``credit_limit`` is the informal udhaar ceiling the owner extends -- bigger for
-# trusted old families and nearby small businesses, modest for newer faces.
+# The store's regulars: ~35 households/shopkeepers the kirana knows by name. Each
+# is recorded the way an owner actually keeps a bahi-khata: a full name PLUS a
+# vague Hinglish location/landmark tag in parentheses -- the little identifier the
+# owner scribbles to tell similar customers apart ("Rakesh -- Gali 4", "Munna --
+# auto wale"). The tag is owner-facing only; the customer-facing WhatsApp reminder
+# strips it (see dukaan.proactive._greeting_name). ``credit_limit`` is the informal
+# udhaar ceiling the owner extends -- bigger for trusted old families and nearby
+# small businesses, modest for newer faces.
 CUSTOMERS: list[dict] = [
-    {"name": "Sharma ji", "phone": "98110 24517", "credit_limit": 5000.0},
-    {"name": "Verma ji", "phone": "98100 31882", "credit_limit": 4000.0},
-    {"name": "Gupta aunty", "phone": "99581 47203", "credit_limit": 3500.0},
-    {"name": "Khan bhai", "phone": "98184 60219", "credit_limit": 6000.0},
-    {"name": "Lakshmi aunty", "phone": "98112 55703", "credit_limit": 2500.0},
-    {"name": "Reddy garu", "phone": "98715 38044", "credit_limit": 5000.0},
-    {"name": "Iqbal bhai", "phone": "99102 84718", "credit_limit": 4500.0},
-    {"name": "Mehta ji", "phone": "98990 71256", "credit_limit": 3000.0},
-    {"name": "Pandey ji", "phone": "98109 64043", "credit_limit": 3500.0},
-    {"name": "Das babu", "phone": "98711 26055", "credit_limit": 2000.0},
-    {"name": "Singh sahab", "phone": "99996 41720", "credit_limit": 5500.0},
-    {"name": "Joshi ji", "phone": "98115 90340", "credit_limit": 3000.0},
-    {"name": "Iyer ji", "phone": "98919 67012", "credit_limit": 4000.0},
-    {"name": "Nair aunty", "phone": "98101 33725", "credit_limit": 2500.0},
-    {"name": "Banerjee da", "phone": "98738 41960", "credit_limit": 3000.0},
-    {"name": "Chaudhary ji", "phone": "98110 77342", "credit_limit": 6000.0},
-    {"name": "Saxena ji", "phone": "98100 22914", "credit_limit": 3500.0},
-    {"name": "Rao garu", "phone": "99581 60483", "credit_limit": 4500.0},
-    {"name": "Fatima aunty", "phone": "98184 11927", "credit_limit": 2500.0},
-    {"name": "Yadav bhai", "phone": "98112 70655", "credit_limit": 3000.0},
-    {"name": "Mishra ji", "phone": "98715 03844", "credit_limit": 4000.0},
-    {"name": "Kapoor ji", "phone": "99102 48871", "credit_limit": 5000.0},
-    {"name": "Bhatt ji", "phone": "98990 17562", "credit_limit": 2500.0},
-    {"name": "Pillai aunty", "phone": "98109 46430", "credit_limit": 3000.0},
-    {"name": "Ghosh babu", "phone": "98711 62055", "credit_limit": 3500.0},
-    {"name": "Aslam bhai", "phone": "99996 14207", "credit_limit": 4000.0},
-    {"name": "Trivedi ji", "phone": "98115 09034", "credit_limit": 3000.0},
-    {"name": "Menon ji", "phone": "98919 76120", "credit_limit": 3500.0},
-    {"name": "Shukla ji", "phone": "98101 13572", "credit_limit": 4000.0},
-    {"name": "Dubey ji", "phone": "98738 14906", "credit_limit": 2500.0},
-    {"name": "Rashid bhai", "phone": "98110 33429", "credit_limit": 4500.0},
-    {"name": "Naidu garu", "phone": "98100 73329", "credit_limit": 3000.0},
-    {"name": "Sengupta didi", "phone": "99581 04927", "credit_limit": 2500.0},
-    {"name": "Patel bhai", "phone": "98184 16203", "credit_limit": 5000.0},
-    {"name": "Ansari bhai", "phone": "98112 50719", "credit_limit": 3500.0},
+    {"name": "Rakesh Sharma (Gali No. 4)", "phone": "98110 24517", "credit_limit": 5000.0},
+    {"name": "Mahesh Verma (Shastri Nagar)", "phone": "98100 31882", "credit_limit": 4000.0},
+    {"name": "Sunita Gupta (DDA Flats, B-Block)", "phone": "99581 47203", "credit_limit": 3500.0},
+    {"name": "Rafiq Khan (Subzi Mandi ke paas)", "phone": "98184 60219", "credit_limit": 6000.0},
+    {"name": "Lakshmi Menon (Railway Colony)", "phone": "98112 55703", "credit_limit": 2500.0},
+    {"name": "Venkat Reddy (Teen Batti)", "phone": "98715 38044", "credit_limit": 5000.0},
+    {"name": "Iqbal Ahmed (Idgah ke paas)", "phone": "99102 84718", "credit_limit": 4500.0},
+    {"name": "Dinesh Mehta (Naya Bazaar)", "phone": "98990 71256", "credit_limit": 3000.0},
+    {"name": "Suresh Pandey (Hanuman Mandir ke peeche)", "phone": "98109 64043", "credit_limit": 3500.0},
+    {"name": "Tapan Das (Kumhar Toli)", "phone": "98711 26055", "credit_limit": 2000.0},
+    {"name": "Gurmeet Singh (Model Town)", "phone": "99996 41720", "credit_limit": 5500.0},
+    {"name": "Prakash Joshi (Petrol pump ke paas)", "phone": "98115 90340", "credit_limit": 3000.0},
+    {"name": "Raman Iyer (Gandhi Chowk)", "phone": "98919 67012", "credit_limit": 4000.0},
+    {"name": "Geeta Nair (Ashok Nagar)", "phone": "98101 33725", "credit_limit": 2500.0},
+    {"name": "Sujoy Banerjee (Lake Road)", "phone": "98738 41960", "credit_limit": 3000.0},
+    {"name": "Mahipal Chaudhary (Sadar Bazaar)", "phone": "98110 77342", "credit_limit": 6000.0},
+    {"name": "Anil Saxena (Civil Lines)", "phone": "98100 22914", "credit_limit": 3500.0},
+    {"name": "Narayan Rao (Ambedkar Colony)", "phone": "99581 60483", "credit_limit": 4500.0},
+    {"name": "Fatima Begum (Masjid wali gali)", "phone": "98184 11927", "credit_limit": 2500.0},
+    {"name": "Munna Yadav (auto wale)", "phone": "98112 70655", "credit_limit": 3000.0},
+    {"name": "Shyam Mishra (Purana Mandir ke paas)", "phone": "98715 03844", "credit_limit": 4000.0},
+    {"name": "Vijay Kapoor (Kothi No. 12)", "phone": "99102 48871", "credit_limit": 5000.0},
+    {"name": "Girish Bhatt (Tanki wali gali)", "phone": "98990 17562", "credit_limit": 2500.0},
+    {"name": "Radha Pillai (LIG Quarters)", "phone": "98109 46430", "credit_limit": 3000.0},
+    {"name": "Nikhil Ghosh (Bara Bazaar)", "phone": "98711 62055", "credit_limit": 3500.0},
+    {"name": "Aslam Sheikh (Nai Basti)", "phone": "99996 14207", "credit_limit": 4000.0},
+    {"name": "Harish Trivedi (School ke saamne)", "phone": "98115 09034", "credit_limit": 3000.0},
+    {"name": "Krishnan Menon (Bus stand ke paas)", "phone": "98919 76120", "credit_limit": 3500.0},
+    {"name": "Devendra Shukla (Bank wali gali)", "phone": "98101 13572", "credit_limit": 4000.0},
+    {"name": "Awadhesh Dubey (Chungi ke paas)", "phone": "98738 14906", "credit_limit": 2500.0},
+    {"name": "Rashid Mansoori (Kabaadi market)", "phone": "98110 33429", "credit_limit": 4500.0},
+    {"name": "Prasad Naidu (Gandhi Nagar)", "phone": "98100 73329", "credit_limit": 3000.0},
+    {"name": "Rina Sengupta (Naya Para)", "phone": "99581 04927", "credit_limit": 2500.0},
+    {"name": "Jignesh Patel (Station Road)", "phone": "98184 16203", "credit_limit": 5000.0},
+    {"name": "Saleem Ansari (Bunkar Colony)", "phone": "98112 50719", "credit_limit": 3500.0},
 ]
 
 _CUSTOMER_NAMES = [c["name"] for c in CUSTOMERS]
@@ -353,7 +357,13 @@ def _build_ledger(start: dt.date, end_date: dt.date, days: int, rnd: random.Rand
         debit_records: list[tuple[int, float]] = []  # (offset, amount) for credits
 
         for i, off in enumerate(debit_offsets):
-            amount = float(rnd.choice((120, 150, 200, 250, 300, 350, 450, 500, 600, 750)))
+            # Real khata amounts are a MIX: mostly round ("de do 500 ka"), some exact
+            # to the rupee (an itemised basket). Pool leans round (common ₹300/₹500
+            # appear twice) with a ~25% sprinkle of odd figures, so balances come out
+            # a believable blend of clean (₹1,900, ₹2,000) and odd (₹1,832) — neither
+            # uniformly round nor uniformly odd (both read as synthetic).
+            amount = float(rnd.choice((100, 150, 200, 250, 300, 300, 350, 400, 450, 500,
+                                       500, 550, 600, 650, 700, 750, 285, 465)))
             note = rnd.choice(_KHATA_NOTE_POOL)
             # Khata terms: settle within ~2-3 weeks. due_date = debit date + term.
             term = rnd.choice((10, 14, 14, 21, 30))
@@ -375,8 +385,9 @@ def _build_ledger(start: dt.date, end_date: dt.date, days: int, rnd: random.Rand
             repay_chance = 0.55 if not is_last else (0.15 if cust in forced_overdue else 0.5)
             if rnd.random() < repay_chance and outstanding > 0:
                 frac = rnd.uniform(0.3, 0.9)
-                pay = round(min(outstanding, max(50.0, amount * frac)) / 10.0) * 10.0
-                pay = max(20.0, pay)
+                # Customers repay in round notes (₹500, ₹1000) -> round to nearest ₹50.
+                pay = round(min(outstanding, max(50.0, amount * frac)) / 50.0) * 50.0
+                pay = max(50.0, pay)
                 pay_off = off + rnd.randint(3, 12)
                 if pay_off < days:
                     events.append({
@@ -396,7 +407,7 @@ def _build_ledger(start: dt.date, end_date: dt.date, days: int, rnd: random.Rand
         if cust in forced_overdue and outstanding <= 0:
             # Add a fresh unpaid debit early enough to be overdue.
             off = rnd.randint(2, max(3, days // 3))
-            amount = float(rnd.choice((200, 300, 400, 500)))
+            amount = float(rnd.choice((300, 418, 489, 550)))
             due = start + dt.timedelta(days=off + rnd.choice((10, 14)))
             events.append({
                 "customer_name": cust,
