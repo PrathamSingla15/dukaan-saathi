@@ -93,6 +93,13 @@ VEENA_SPEAKER = _env("DUKAAN_VEENA_SPEAKER", "agastya")  # kavya | agastya | mai
 VEENA_SNAC_MODEL = _env("DUKAAN_VEENA_SNAC", "hubertsiuzdak/snac_24khz")
 VEENA_4BIT = _flag("DUKAAN_VEENA_4BIT", False)  # 4-bit (needs bitsandbytes); else bf16
 
+# --------------------------------------------------- remote inference seams (Modal)
+# When set, STT/TTS are called over HTTP at these endpoints instead of loading the
+# model in-process — lets the HF Space run on free CPU and offload GPU work to Modal.
+# Unset (default) = run the model locally, so the same code works on the GPU host too.
+STT_BASE_URL = _env("DUKAAN_STT_BASE_URL", "")
+TTS_BASE_URL = _env("DUKAAN_TTS_BASE_URL", "")
+
 # ------------------------------------------------------------------------ Gradio
 GRADIO_HOST = _env("DUKAAN_GRADIO_HOST", "0.0.0.0")
 GRADIO_PORT = int(_env("DUKAAN_GRADIO_PORT", "7860"))

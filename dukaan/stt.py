@@ -141,6 +141,31 @@ def to_whisper_input(sr: int, y: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(y, dtype=np.float32)
 
 
+def _remote_transcribe(audio, language: str | None = None) -> TranscribeResult:
+    """Transcribe via a remote STT endpoint (``config.STT_BASE_URL``) instead of a
+    local model — used when the app runs CPU-only and offloads to a GPU service
+    (e.g. Modal). On any network error returns ok=False so the caller re-asks."""
+    import httpx
+    try:
+        if isinstance(audio, tuple):
+            sr, y = audio
+            arr = to_whisper_input(int(sr), np.asarray(y))
+        elif isinstance(audio, str):
+            return TranscribeResult("", "", 0.0, 1.0, ok=False, reason="empty_audio")
+        else:
+            arr = to_whisper_input(_TARGET_SR, np.asarray(audio))
+        r = httpx.post(config.STT_BASE_URL,
+                       json={"sr": _TARGET_SR, "audio": arr.tolist(), "language": language},
+                       timeout=120)
+        r.raise_for_status()
+        d = r.json()
+        return TranscribeResult(d.get("text", ""), d.get("language", ""),
+                                float(d.get("confidence", 0.0)), float(d.get("no_speech", 1.0)),
+                                ok=bool(d.get("ok")), reason=d.get("reason", ""))
+    except Exception:
+        return TranscribeResult("", "", 0.0, 1.0, ok=False, reason="stt_error")
+
+
 def transcribe(audio, language: str | None = None) -> TranscribeResult:
     """Transcribe speech to text, returning a structured :class:`TranscribeResult`.
 
@@ -158,6 +183,10 @@ def transcribe(audio, language: str | None = None) -> TranscribeResult:
     # --- empty / None guard ---------------------------------------------------
     if audio is None:
         return TranscribeResult("", "", 0.0, 1.0, ok=False, reason="empty_audio")
+
+    # --- remote STT seam: offload to a GPU endpoint when configured -----------
+    if config.STT_BASE_URL:
+        return _remote_transcribe(audio, language)
 
     # --- resolve input shape -> arr ready for the model ----------------------
     if isinstance(audio, tuple):
@@ -230,5 +259,10 @@ def transcribe_text(audio, language: str | None = None) -> str:
 
 
 def warmup() -> None:
-    """Eagerly load the model so the first real transcription isn't slow."""
+    """Eagerly load the model so the first real transcription isn't slow.
+
+    Skipped when STT is served remotely (``config.STT_BASE_URL`` set) — there's
+    nothing to load locally, so a CPU-only host doesn't pull the model."""
+    if config.STT_BASE_URL:
+        return
     get_model()

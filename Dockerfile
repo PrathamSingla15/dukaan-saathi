@@ -17,7 +17,9 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git curl ca-certificates bash \
     && rm -rf /var/lib/apt/lists/*
-RUN useradd -m -u 1000 user
+# The llama.cpp base image already has a UID-1000 user; -o lets us add our named
+# "user" sharing that UID (HF Spaces runs as uid 1000) instead of failing.
+RUN useradd -m -u 1000 -o user
 USER user
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH

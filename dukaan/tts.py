@@ -214,12 +214,33 @@ def _clean_for_tts(text: str) -> str:
 
 
 # ------------------------------------------------------------------- public API
+def _remote_synthesize(text: str) -> tuple[int, np.ndarray]:
+    """Synthesize via a remote TTS endpoint (``config.TTS_BASE_URL``) instead of a
+    local model — used when the app runs CPU-only and offloads to a GPU service
+    (e.g. Modal). Sends raw text (the endpoint cleans it). Silence on any failure."""
+    if text is None or not text.strip():
+        return _SILENCE
+    try:
+        import io
+        import httpx
+        import soundfile as sf
+        r = httpx.post(config.TTS_BASE_URL, json={"text": text}, timeout=120)
+        r.raise_for_status()
+        wav, sr = sf.read(io.BytesIO(r.content), dtype="float32")
+        return int(sr), np.atleast_1d(np.asarray(wav, dtype=np.float32))
+    except Exception as exc:  # noqa: BLE001 — never break the UI on the voice path
+        log.warning("Remote TTS failed (%s); returning silence.", exc)
+        return _SILENCE
+
+
 def synthesize(text: str) -> tuple[int, np.ndarray]:
     """Speak ``text`` with Veena → ``(sampling_rate, waveform float32)``.
 
     Veena speaks Hindi / English / Hinglish. Empty text yields a short silence, and
     *any* failure yields ``(16000, zeros)`` so the UI never crashes on playback.
     """
+    if config.TTS_BASE_URL:
+        return _remote_synthesize(text)
     if text is None or not text.strip():
         return _SILENCE
     text = _clean_for_tts(text.strip())
@@ -233,7 +254,12 @@ def synthesize(text: str) -> tuple[int, np.ndarray]:
 
 
 def warmup() -> None:
-    """Pre-load Veena so the first real call isn't slow. Never raises."""
+    """Pre-load Veena so the first real call isn't slow. Never raises.
+
+    Skipped when TTS is served remotely (``config.TTS_BASE_URL`` set) — there's
+    nothing to load locally, so a CPU-only host doesn't pull the model."""
+    if config.TTS_BASE_URL:
+        return
     try:
         _load_veena()
         log.info("TTS warmup complete (veena).")

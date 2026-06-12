@@ -6,7 +6,7 @@ colorTo: red
 sdk: docker
 app_port: 7860
 pinned: false
-short_description: Hindi-first voice + photo inventory & udhaar ledger for kirana shops
+short_description: Hindi voice + photo inventory & udhaar ledger for kiranas
 ---
 
 # 🏪 Dukaan Saathi
