@@ -42,6 +42,53 @@ def is_devanagari_lang(code: str) -> bool:
     return code.strip().lower() in _DEVANAGARI_CODES
 
 
+# ---------------------------------------------------------------- date formatting
+# Locale-independent month / weekday names — we never rely on a system locale being
+# installed on the Space. Month tables are indexed [month-1]; weekday tables use
+# date.weekday() where Monday == 0. Used by the UI to write the date at the top of
+# the ledger page (a real bahi-khata always does), in both English and Hindi.
+_EN_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
+              "August", "September", "October", "November", "December")
+_EN_MONTHS_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug",
+                   "Sep", "Oct", "Nov", "Dec")
+_EN_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                "Saturday", "Sunday")
+_EN_WEEKDAYS_ABBR = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_HI_MONTHS = ("जनवरी", "फ़रवरी", "मार्च", "अप्रैल", "मई", "जून", "जुलाई",
+              "अगस्त", "सितंबर", "अक्टूबर", "नवंबर", "दिसंबर")
+_HI_WEEKDAYS = ("सोमवार", "मंगलवार", "बुधवार", "गुरुवार", "शुक्रवार",
+                "शनिवार", "रविवार")
+_HI_WEEKDAYS_ABBR = ("सोम", "मंगल", "बुध", "गुरु", "शुक्र", "शनि", "रवि")
+
+
+def format_date_full(d) -> tuple[str, str]:
+    """A long, ledger-style date as ``(english, hindi)``.
+
+    e.g. ``date(2026, 6, 12)`` -> ``("Friday, 12 June 2026", "12 जून 2026, शुक्रवार")``.
+    """
+    wd, mo = d.weekday(), d.month - 1
+    en = f"{_EN_WEEKDAYS[wd]}, {d.day} {_EN_MONTHS[mo]} {d.year}"
+    hi = f"{d.day} {_HI_MONTHS[mo]} {d.year}, {_HI_WEEKDAYS[wd]}"
+    return en, hi
+
+
+def format_date_short(d) -> tuple[str, str]:
+    """A compact date as ``(english, hindi)``.
+
+    e.g. ``date(2026, 6, 12)`` -> ``("Fri, 12 Jun 2026", "शुक्र, 12 जून 2026")``.
+    """
+    wd, mo = d.weekday(), d.month - 1
+    en = f"{_EN_WEEKDAYS_ABBR[wd]}, {d.day} {_EN_MONTHS_ABBR[mo]} {d.year}"
+    hi = f"{_HI_WEEKDAYS_ABBR[wd]}, {d.day} {_HI_MONTHS[mo]} {d.year}"
+    return en, hi
+
+
+def format_month_day(d) -> tuple[str, str]:
+    """Just the day + month as ``(english, hindi)``, e.g. ``("28 Aug", "28 अगस्त")``."""
+    mo = d.month - 1
+    return f"{d.day} {_EN_MONTHS_ABBR[mo]}", f"{d.day} {_HI_MONTHS[mo]}"
+
+
 # ---------------------------------------------------------------- STT retry
 
 # Maps optional `reason` tag to a short Hindi phrase inserted into the message.

@@ -316,7 +316,7 @@ body.lang-hi .block-en { display: none; }
 .dk-talkgrid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px; align-items: start; }
 .dk-chatwrap {
   background: var(--paper); border: 1px solid var(--paper-line); border-radius: var(--radius);
-  box-shadow: var(--sh-1); display: flex; flex-direction: column; min-height: 520px;
+  box-shadow: var(--sh-1); display: flex; flex-direction: column; min-height: 460px;
 }
 .dk-chathead { padding: 12px 16px; border-bottom: 1px solid var(--rule); display: flex; align-items: center; gap: 9px; }
 .dk-chathead .t { font-weight: 800; color: var(--ink); }
@@ -339,7 +339,7 @@ body.lang-hi .block-en { display: none; }
   border-left: 3px solid var(--marigold); border-radius: 3px 12px 12px 12px; font-family: var(--deva);
 }
 .dk-msg--bot .dk-msg__body.err { border-left-color: var(--red); }
-.dk-welcome { margin: auto; text-align: center; color: var(--ink-faint); max-width: 36ch; }
+.dk-welcome { margin: auto; text-align: center; color: var(--ink-faint); max-width: 480px; padding: 8px 0; }
 .dk-welcome .big { font-size: 40px; opacity: .5; }
 
 /* typing shimmer */
@@ -556,3 +556,55 @@ body.lang-hi .block-en { display: none; }
   .dk-tab { padding: 8px 11px; font-size: 14px; }
   .dk-tab .ic { margin-right: 4px; }
 }
+
+/* ---------- live date + festival chip (masthead) ------------------------- */
+.dk-mast__date {
+  margin-top: 6px; font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; line-height: 1.4;
+}
+.dk-mast__date .ph { color: var(--brass); vertical-align: -0.12em; }
+.dk-mast__dateval .i18n-hi { font-family: var(--deva); }
+.dk-mast__fest {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700;
+  color: var(--brass); background: var(--marigold-soft);
+  border: 1px solid rgba(224,149,43,.4); border-radius: 999px; padding: 1px 9px;
+}
+.dk-mast__fest .ph { color: var(--marigold); }
+.dk-mast__fest .i18n-hi { font-family: var(--deva); }
+/* the per-page date sits in the section-head meta slot; keep Devanagari legible */
+.dk-secthead .meta .ph { color: var(--brass); margin-right: 3px; }
+.dk-secthead .meta .i18n-hi { font-family: var(--deva); }
+
+/* ---------- talk: empty-state starter chips ------------------------------ */
+.dk-suggests { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+.dk-suggest {
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--serif); font-size: 13.5px; font-weight: 600; color: var(--ink-2);
+  background: #fffaf0; border: 1.5px solid var(--paper-line); border-radius: 999px;
+  padding: 7px 14px; box-shadow: var(--sh-1);
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease, color .14s ease;
+}
+.dk-suggest:hover { border-color: var(--marigold); color: var(--ink); transform: translateY(-1px); box-shadow: var(--sh-2); }
+.dk-suggest .ph { color: var(--brass); }
+.dk-suggest .i18n-hi { font-family: var(--deva); }
+
+/* ---------- agent "how Saathi answered" trace (Best Agent visibility) ---- */
+.dk-trace {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 8px 0 0 2px; font-family: var(--mono); font-size: 11px;
+}
+.dk-trace__lab { color: var(--ink-faint); letter-spacing: .02em; }
+.dk-trace__lab .ph { color: var(--brass); margin-right: 3px; vertical-align: -0.1em; }
+.dk-trace__lab .i18n-hi { font-family: var(--deva); }
+.dk-trace__step {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px;
+  border-radius: 999px; background: rgba(32,48,78,.05); color: var(--ink-2);
+  border: 1px solid var(--rule);
+}
+.dk-trace__step .ph { color: var(--brass); }
+.dk-trace__step .i18n-hi { font-family: var(--deva); }
+
+/* khata: hint the reminder pill on hover too (not just on select) so it's discoverable */
+.dk-khata-row:hover .dk-remind-btn { display: inline-flex; opacity: .65; }
+.dk-khata-row.dk-row--selected .dk-remind-btn,
+.dk-khata-row.dk-row--open .dk-remind-btn { opacity: 1; }

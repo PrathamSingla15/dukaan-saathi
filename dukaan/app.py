@@ -26,6 +26,7 @@ Design notes
 
 from __future__ import annotations
 
+import datetime as _dt
 import html as _html
 import os
 import re
@@ -35,7 +36,7 @@ from pathlib import Path
 
 import gradio as gr
 
-from dukaan import config, db, onboarding, proactive, receiving, session
+from dukaan import config, db, i18n, onboarding, proactive, receiving, session
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -182,7 +183,25 @@ def _days_chip(d) -> str:
 
 
 # ============================================================ render: chrome
-def masthead_html() -> str:
+def _mast_festival_chip(snap: dict | None) -> str:
+    """A small festival-countdown chip for the masthead — only when one is near."""
+    fest = (snap or {}).get("festival") or {}
+    fobj = fest.get("festival") if isinstance(fest, dict) else None
+    if not fobj:
+        return ""
+    away = fest.get("days_away")
+    when = (T("today", "आज") if away == 0
+            else T("tomorrow", "कल") if away == 1
+            else T(f"in {away} days", f"{away} दिन में"))
+    return (f'<span class="dk-mast__fest">{ic("confetti")} '
+            f'{_esc(fobj.get("name"))} · {when}</span>')
+
+
+def masthead_html(snap: dict | None = None) -> str:
+    # The date sits at the top of the page, the way a real bahi-khata always opens.
+    # Rendered once at page load (fine for a session); both languages emitted.
+    en_full, hi_full = i18n.format_date_full(_dt.date.today())
+    date_line = T(f"Account for {en_full}", f"{hi_full} का हिसाब")
     return f"""
 <div class="dk-mast">
   <div class="dk-brand">
@@ -190,6 +209,7 @@ def masthead_html() -> str:
     <div>
       <div class="dk-title"><span class="en i18n-en">Dukaan Saathi</span><span class="hi i18n-hi">दुकान साथी</span></div>
       <div class="dk-sub">{T(_TAGLINE_EN, _TAGLINE_HI)}</div>
+      <div class="dk-mast__date">{ic("calendar-blank")}<span class="dk-mast__dateval">{date_line}</span>{_mast_festival_chip(snap)}</div>
     </div>
   </div>
   <div class="dk-lang" role="group" aria-label="Language">
@@ -218,6 +238,14 @@ def _secthead(icon: str, en: str, hi: str, meta: str = "") -> str:
     m = f'<span class="meta">{meta}</span>' if meta else ""
     return (f'<div class="dk-secthead"><h2>{icon} {T(en, hi)}'
             f'<span class="dot"> ·</span></h2>{m}</div>')
+
+
+def _page_date_meta(extra: str = "") -> str:
+    """Today's date for a section-head meta slot (every page carries it, like a real
+    register). ``extra`` appends a tag after the date (e.g. demo/live on Today)."""
+    en, hi = i18n.format_date_short(_dt.date.today())
+    base = f'{ic("calendar-blank")} {T(en, hi)}'
+    return f"{base} · {extra}" if extra else base
 
 
 # ============================================================ render: dashboard
@@ -359,7 +387,34 @@ def dashboard_html(snap: dict | None) -> str:
   <div class="deva" style="font-size:15px;line-height:1.55;color:var(--ink)">{_text(fmsg)}</div>
 </div>""")
     else:
-        cards.append(f"""
+        # No festival in the nudge window: instead of a near-empty card (which
+        # leaves a dead block next to the full col-7 beside it), surface the next
+        # upcoming festival so the card stays useful and the row stays balanced.
+        nxt = fest.get("next") if isinstance(fest, dict) else None
+        if nxt:
+            try:
+                den, dhi = i18n.format_month_day(_dt.date.fromisoformat(nxt.get("date")))
+            except (TypeError, ValueError):
+                den = dhi = ""
+            na = nxt.get("days_away")
+            na_txt = (T("today", "आज") if na == 0 else T("tomorrow", "कल") if na == 1
+                      else T(f"in {na} days", f"{na} दिन में"))
+            next_row = (
+                f'<div class="dk-list__row" data-ask="{_esc(nxt.get("name"))} ke liye kya stock karna chahiye?">'
+                f'<span class="nm">{_esc(nxt.get("name"))}{_est_badge(nxt.get("estimated"))}</span>'
+                f'<span class="sub">· {T(den, dhi)}</span>'
+                f'<span class="amt">{na_txt}</span></div>')
+            cards.append(f"""
+<div class="dk-card col-5">
+  <div class="dk-card__head"><span class="dk-card__icon">{ic("confetti")}</span>
+    <span class="dk-card__title">{T("Festival watch", "त्योहार पर नज़र")}</span>
+    <span class="dk-badge--muted dk-card__tag">{T("all clear", "अभी कुछ नहीं")}</span></div>
+  <div class="dk-empty" style="padding:4px 0 2px">{T("Nothing in the next 30 days · next big day", "अगले 30 दिन में कुछ नहीं · अगला बड़ा दिन")}</div>
+  {next_row}
+  <div class="dk-hint">{T("We'll nudge you a few days before.", "कुछ दिन पहले याद दिला देंगे।")}</div>
+</div>""")
+        else:
+            cards.append(f"""
 <div class="dk-card col-5">
   <div class="dk-card__head"><span class="dk-card__icon">{ic("confetti")}</span>
     <span class="dk-card__title">{T("Festival watch", "त्योहार पर नज़र")}</span></div>
@@ -402,6 +457,52 @@ _INTENT = {
 }
 
 
+# Tappable starter questions on the empty Talk screen — each fills the composer and
+# submits (head.html's data-ask handler). Label is short + bilingual; the data-ask
+# value is the Hinglish the agent expects.
+_WELCOME_CHIPS = (
+    ("shopping-cart", "Today's sales", "आज की बिक्री", "aaj kitni bikri hui?"),
+    ("notebook", "Top udhaar", "सबसे ज़्यादा उधार", "sabse zyada udhaar kiska hai?"),
+    ("package", "Check stock", "स्टॉक देखें", "Parle-G ka stock kitna hai?"),
+    ("hourglass-medium", "Expiring soon", "जल्दी एक्सपायरी", "kya kuch jaldi expire ho raha hai?"),
+)
+
+# A friendly, bilingual gloss for each tool the agent can call. We turn a turn's
+# raw tool-call list into a small "how Saathi answered" trace under the reply, so
+# the owner (and a judge) can see the agent actually planning + acting on the books
+# rather than a black box — the visible side of the "Best Agent" capability.
+_TOOL_TRACE = {
+    "query_database":       ("magnifying-glass", "read the books", "बही पढ़ी"),
+    "get_dashboard":        ("gauge", "checked today's summary", "आज का हाल देखा"),
+    "get_item_detail":      ("package", "looked up the item", "सामान देखा"),
+    "get_customer_dues":    ("notebook", "checked the udhaar", "उधार देखा"),
+    "add_inventory_tool":   ("package", "prepared a stock entry", "स्टॉक तैयार किया"),
+    "record_sale_tool":     ("shopping-cart", "prepared the sale", "बिक्री तैयार की"),
+    "record_purchase_tool": ("truck", "prepared the purchase", "खरीद तैयार की"),
+    "add_udhaar_tool":      ("notebook", "prepared the udhaar", "उधार तैयार किया"),
+    "record_payment_tool":  ("hand-coins", "prepared the payment", "भुगतान तैयार किया"),
+    "confirm_pending_tool": ("check", "saved it to the books", "बही में सेव किया"),
+}
+
+
+def _tool_trace_html(tools) -> str:
+    """Render a turn's tool calls as a small 'what Saathi did' trace under the reply."""
+    if not tools:
+        return ""
+    order: list[str] = []
+    for t in tools:
+        if t in _TOOL_TRACE and t not in order:
+            order.append(t)
+    if not order:
+        return ""
+    steps = "".join(
+        f'<span class="dk-trace__step">{ic(_TOOL_TRACE[t][0])} {T(_TOOL_TRACE[t][1], _TOOL_TRACE[t][2])}</span>'
+        for t in order
+    )
+    return (f'<div class="dk-trace"><span class="dk-trace__lab">{ic("path")} '
+            f'{T("how Saathi answered", "साथी ने कैसे देखा")}</span>{steps}</div>')
+
+
 def chat_html(history: list[dict], *, typing: bool = False, status: str = "") -> str:
     rows: list[str] = []
     for i, m in enumerate(history or []):
@@ -427,14 +528,20 @@ def chat_html(history: list[dict], *, typing: bool = False, status: str = "") ->
                 f'<div class="dk-msg dk-msg--bot"><div class="dk-msg__meta">'
                 f'{ic("storefront")} {T("Saathi", "साथी")} {bc}'
                 f'<span class="dk-msg__spacer"></span>{speak}</div>'
-                f'<div class="dk-msg__body{err}"><div class="dk-md">{_md(m.get("text"))}</div></div></div>')
+                f'<div class="dk-msg__body{err}"><div class="dk-md">{_md(m.get("text"))}</div></div>'
+                f'{_tool_trace_html(m.get("tools"))}</div>')
     if typing:
         lbl = f'<span class="dk-typing__t">{status}</span>' if status else ""
         rows.append(f'<div class="dk-typing">{lbl}<i></i><i></i><i></i></div>')
 
     if not rows:
+        chips = "".join(
+            f'<span class="dk-suggest" data-ask="{_esc(q)}">{ic(icn)} {T(en, hi)}</span>'
+            for icn, en, hi, q in _WELCOME_CHIPS
+        )
         body = (f'<div class="dk-welcome"><div class="big">{ic("hand-waving")}</div>'
-                f'<p>{T("Namaste! Tell me a sale, a credit, or a question · by voice, photo, or text.", "नमस्ते! बिक्री, उधार या सवाल बताइए · बोलकर, फ़ोटो से या टाइप करके।")}</p></div>')
+                f'<p>{T("Namaste! Tell me a sale, a credit, or a question · by voice, photo, or text.", "नमस्ते! बिक्री, उधार या सवाल बताइए · बोलकर, फ़ोटो से या टाइप करके।")}</p>'
+                f'<div class="dk-suggests">{chips}</div></div>')
     else:
         body = "".join(rows)
 
@@ -578,6 +685,12 @@ def receive_intro() -> str:
             f'<span class="dk-card__icon">{ic("truck")}</span>'
             f'<span class="dk-card__title">{T("Receive from a challan", "चालान से सामान लें")}</span></div>'
             f'<div class="muted">{T("Snap a supplier bill. The assistant reads the line items, matches them to your stock (restock vs. new), and estimates expiry. Review, then add to inventory in one tap.", "सप्लायर का बिल फ़ोटो लें। सहायक हर चीज़ पढ़कर आपके स्टॉक से मिलाता है (रीस्टॉक या नया) और एक्सपायरी का अनुमान लगाता है। जाँच कर एक टैप में स्टॉक में जोड़ें।")}</div></div>')
+
+
+def _receive_hint() -> str:
+    """Small 'next step' cue shown in the result panel before a bill is read."""
+    return (f'<div class="dk-hint">{ic("arrow-up")} '
+            f'{T("Upload the bill photo above, then tap “Read the bill”.", "ऊपर बिल की फ़ोटो डालें, फिर “बिल पढ़ें” दबाएँ।")}</div>')
 
 
 def receive_preview_html(preview: dict | None) -> str:
@@ -812,6 +925,8 @@ def respond(mm, history, thread_id):
             history[bi]["text"] = txt
             history[bi]["intent"] = tr.intent_badge
         history[bi]["err"] = bool(tr.error)
+        if tr.tool_calls:
+            history[bi]["tools"] = tr.tool_calls
 
         is_final = bool(tr.dashboard_snapshot or tr.pending_confirmation or tr.error)
         if is_final or (len(txt) - last_len) >= 5:
@@ -890,14 +1005,14 @@ def refresh_stock():
 
 def receive_parse(image):
     if image is None:
-        return receive_intro(), None
+        return _receive_hint(), None
     preview = receiving.stage_receive(image=image)
     return receive_preview_html(preview), (preview if preview.get("ok") else None)
 
 
 def receive_commit(preview):
     if not preview or not preview.get("items"):
-        return (receive_intro(), None,
+        return (_receive_hint(), None,
                 refresh_dashboard(), refresh_stock())
     result = receiving.commit_receive(preview["items"], supplier=preview.get("supplier"))
     return (receive_result_html(result), None,
@@ -976,13 +1091,14 @@ def build_ui() -> gr.Blocks:
         preview = gr.State(None)
 
         with gr.Column(elem_classes=["dk-shell"]):
-            _panel(masthead_html())
+            _panel(masthead_html(initial))
             _panel(nav_html())
 
             # ---------------------------------------------------------- TODAY
             with gr.Column(elem_id="page-today", elem_classes=["dk-page", "dk-page--active"]):
                 _panel(_secthead(ic("sun"), "Today's account", "आज का हिसाब",
-                                 meta=("demo data" if db.data_mode() == "demo" else "live")))
+                                 meta=_page_date_meta(T("demo data", "डेमो डेटा")
+                                                      if db.data_mode() == "demo" else T("live", "लाइव"))))
                 briefing = _panel(briefing_placeholder())
                 with gr.Row(elem_classes=["dk-btnrow"]):
                     brief_btn = _btn(ic("speaker-high") + " " + T("Generate morning briefing", "सुबह का हाल बनाएँ"), kind="gold")
@@ -995,7 +1111,8 @@ def build_ui() -> gr.Blocks:
 
             # ---------------------------------------------------------- TALK
             with gr.Column(elem_id="page-talk", elem_classes=["dk-page"]):
-                _panel(_secthead(ic("microphone"), "Talk to your Saathi", "साथी से बात करें"))
+                _panel(_secthead(ic("microphone"), "Talk to your Saathi", "साथी से बात करें",
+                                 meta=_page_date_meta()))
                 chat = _panel(chat_html([]), elem_id="dk-chat-panel")
                 with gr.Row(visible=False, elem_classes=["dk-btnrow"]) as confirm_row:
                     haan_btn = _btn(ic("check") + " " + T("Yes", "हाँ"), kind="primary")
@@ -1003,6 +1120,8 @@ def build_ui() -> gr.Blocks:
                 # One chat composer bar: type, speak (mic), attach a bill photo, send.
                 # MultimodalTextbox keeps Gradio's own (working) controls — we only
                 # frame it; we never reset its internals (that broke the old inputs).
+                _panel(f'<div class="dk-inlabel">{ic("chat-circle-dots")} '
+                       f'{T("Speak, type, or snap a bill", "बोलें, टाइप करें, या बिल की फ़ोटो दिखाएँ")}</div>')
                 composer = gr.MultimodalTextbox(
                     sources=["microphone", "upload"], file_count="multiple",
                     show_label=False, placeholder=_PLACEHOLDER, submit_btn=True,
@@ -1021,7 +1140,8 @@ def build_ui() -> gr.Blocks:
 
             # ---------------------------------------------------------- KHATA
             with gr.Column(elem_id="page-khata", elem_classes=["dk-page"]):
-                _panel(_secthead(ic("notebook"), "Credit ledger", "उधार बही"))
+                _panel(_secthead(ic("notebook"), "Credit ledger", "उधार बही",
+                                 meta=_page_date_meta()))
                 khata = _panel(khata_html(initial))
                 # hidden bridge (mirrors the speaker bridge): JS writes "<name>|<nonce>" into the
                 # textbox and clicks the button → remind_one() re-renders the ledger with the
@@ -1032,14 +1152,17 @@ def build_ui() -> gr.Blocks:
 
             # ---------------------------------------------------------- STOCK
             with gr.Column(elem_id="page-stock", elem_classes=["dk-page"]):
-                _panel(_secthead(ic("package"), "Stock & expiry", "स्टॉक और एक्सपायरी"))
+                _panel(_secthead(ic("package"), "Stock & expiry", "स्टॉक और एक्सपायरी",
+                                 meta=_page_date_meta()))
                 stock = _panel(stock_html(initial))
                 _panel('<div class="spacer-16"></div>')
                 stock_refresh = _btn(ic("arrows-clockwise") + " " + T("Refresh", "ताज़ा करें"), kind="ghost")
 
             # ---------------------------------------------------------- RECEIVE
             with gr.Column(elem_id="page-receive", elem_classes=["dk-page"]):
-                _panel(_secthead(ic("truck"), "Receive a delivery", "सामान आया"))
+                _panel(_secthead(ic("truck"), "Receive a delivery", "सामान आया",
+                                 meta=_page_date_meta()))
+                _panel(receive_intro())   # explainer first — natural reading order
                 with gr.Group(elem_classes=["dk-inputcard"]):
                     _panel(f'<div class="dk-inlabel">{ic("camera")} {T("Photo of the challan / bill", "चालान / बिल की फ़ोटो")}</div>')
                     rcv_img = gr.Image(sources=["upload", "webcam"], type="pil",
@@ -1048,11 +1171,12 @@ def build_ui() -> gr.Blocks:
                     rcv_parse = _btn(ic("magnifying-glass") + " " + T("Read the bill", "बिल पढ़ें"), kind="primary")
                     rcv_commit = _btn(ic("check") + " " + T("Add to stock", "स्टॉक में डालें"), kind="gold")
                 _panel('<div class="spacer-8"></div>')
-                rcv_view = _panel(receive_intro())
+                rcv_view = _panel(_receive_hint())   # preview / result lands here, below the buttons
 
             # ---------------------------------------------------------- SETUP
             with gr.Column(elem_id="page-setup", elem_classes=["dk-page"]):
-                _panel(_secthead(ic("pencil-simple"), "Set up your shop", "अपनी दुकान सेट करें"))
+                _panel(_secthead(ic("pencil-simple"), "Set up your shop", "अपनी दुकान सेट करें",
+                                 meta=_page_date_meta()))
                 onb_view = _panel(onboarding_intro())
                 begin_btn = _btn(ic("pencil-simple") + " " + T("Begin setup", "शुरू करें"), kind="primary")
                 _panel('<div class="spacer-16"></div>')

@@ -45,7 +45,11 @@ LLM_BASE_URL = _env("DUKAAN_LLM_BASE_URL", f"http://{LLM_HOST}:{LLM_PORT}/v1")
 LLM_API_KEY = _env("DUKAAN_LLM_API_KEY", "not-needed")  # any non-empty string
 LLM_MODEL = _env("DUKAAN_LLM_MODEL", "gemma-4-12b")
 LLM_TEMPERATURE = float(_env("DUKAAN_LLM_TEMPERATURE", "0.0"))
-LLM_REQUEST_TIMEOUT = float(_env("DUKAAN_LLM_REQUEST_TIMEOUT", "120"))
+# 180s (not 120): when the LLM is hosted on Modal with scale-to-zero, the first
+# request after idle pays a cold start (GGUF load) that can exceed two minutes —
+# give it room to finish instead of erroring mid-demo. Warm requests still return
+# in seconds. Pre-warm with scripts/prewarm.py before filming to avoid the wait.
+LLM_REQUEST_TIMEOUT = float(_env("DUKAAN_LLM_REQUEST_TIMEOUT", "180"))
 # Gemma-4 has a native "thinking" mode that is slow and can swallow the entire
 # answer into reasoning tokens (empty content). We disable it for fast, direct
 # replies and reliable tool calls — the deep-agent loop supplies the reasoning.

@@ -262,7 +262,14 @@ def festival_nudge(today: dt.date | str | None = None) -> dict:
 
     fest, days_away = _next_festival(today, config.FESTIVAL_LOOKAHEAD_DAYS)
     if fest is None:
+        # Nothing within the nudge window — still surface the nearest upcoming
+        # festival (up to a year out) so the dashboard's festival card stays
+        # informative instead of empty ("next big day: Raksha Bandhan, 28 Aug").
+        nxt, nxt_days = _next_festival(today, 366)
         return {"festival": None, "days_away": None,
+                "next": ({"name": nxt["name"], "date": nxt["date"].isoformat(),
+                          "days_away": nxt_days, "estimated": bool(nxt.get("estimated"))}
+                         if nxt else None),
                 "message": (f"Agle {config.FESTIVAL_LOOKAHEAD_DAYS} din me koi bada "
                             "tyohaar nahi hai. 👍")}
 

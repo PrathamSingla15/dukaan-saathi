@@ -20,7 +20,7 @@ Built for the **Build Small Hackathon · Backyard AI track**. See [`design.md`](
 
 The shopkeeper just **talks in Hindi** (or snaps a photo of a bill / label). Everything else — stock, sales, purchases, credit, expiry alerts, festival nudges, polite payment reminders — is handled automatically.
 
-## Stack (all local, runs on one GPU)
+## Stack (open-weight models, ≤32B)
 
 | Layer | Choice |
 |---|---|
@@ -60,6 +60,40 @@ uv run python -m dukaan.app        # starts Gradio on :7860
 - **"Why isn't X selling?" diagnostic** — multi-turn agentic reasoning over sales trends
 - **Reminder drafter** — drafts a polite Hindi collection message for overdue udhaar
 - **Margin & stock-value visibility** — selling price · purchase price · MRP per item
+
+## Hosting & deployment (Modal + HF Space)
+
+The live submission is a **Hugging Face Docker Space** that offloads all GPU work to **Modal**:
+
+- **Modal** (`scripts/modal_app.py` · app `dukaan-llm` · one **L4**, kept warm with `min_containers=1`) serves *everything on one GPU* — the **LLM + vision/OCR** (`llama-server`, Gemma-4-12B GGUF, OpenAI-compatible `/v1`), **STT** (`/stt`, faster-whisper) and **TTS** (`/tts`, Veena). Deploy: `PYTHONPATH="$PWD" modal deploy scripts/modal_app.py`.
+- The **HF Space** runs the Gradio "Bahi-Khata" UI on free CPU and calls Modal via the secrets `DUKAAN_LLM_BASE_URL` / `DUKAAN_STT_BASE_URL` / `DUKAAN_TTS_BASE_URL` (+ `HF_TOKEN` for gated Veena). One warm GPU = one bill, and the whole stack is **open-weight models (≤32B)** — no proprietary AI APIs.
+- Warm the endpoint ~2 min before a demo: `uv run python scripts/prewarm.py https://<workspace>--dukaan-llm-serve.modal.run`.
+
+A self-contained single-container **L4 Space** (`Dockerfile` + `scripts/space_entrypoint.sh`) is kept as a fallback that runs the LLM in-process; the entrypoint auto-detects local vs remote from `DUKAAN_LLM_BASE_URL`.
+
+## Tracks & badges
+
+| Target | Evidence |
+|---|---|
+| 🏡 **Backyard AI** (Track-1) | A real kirana owner's daily problem — voice udhaar, challan OCR, FEFO/expiry, festival nudges — run on the owner's real books (demo video). |
+| 🟢 **Modal** (sponsor) | LLM + OCR + STT + TTS all hosted on Modal (`scripts/modal_app.py`). |
+| 🤖 **Best Agent** | deepagents loop · 10 tools (read + write + vision OCR) · confirm-before-write · a visible tool-call trace under every reply. |
+| 🎨 **Off-Brand** | Custom "Bahi-Khata" HTML/CSS/JS ledger UI (cream paper, brass numerals, instant EN⇄हिं). |
+| 🦙 **Llama Champion** | Runs on `llama.cpp` (`llama-server`). |
+| 📓 **Field Notes** | Build write-up / blog (linked below). |
+| 📡 **Sharing-is-Caring** | Exported agent trace (`scripts/export_trace.py`). |
+| 🐜 **Tiny Titan** / 🏮 **OpenBMB** | Companion entry swaps the LLM to **MiniCPM-V 4.6 (≤4B)** — config-only (`DUKAAN_LLM_*`). |
+
+## Evaluation
+
+- **Headless suite** — `uv run pytest -q` → **56 pass / 2 skip** (LLM, STT and vision mocked): cross-DB integrity, FEFO lots, balances, staging/oversell, tools, onboarding, festival intent.
+- **Real-model end-to-end** — `scripts/e2e_full.py` drives ~24 real Gemma turns over the seeded kirana data across **38 hard checks**: tool routing (read vs write), ground-truth lookups, confirm-before-write, FEFO sale, qty-merge restock, oversell hard-block, SQL guard, ambiguity clarification, vision challan receive, Hindi STT, TTS, morning briefing, festival calendar. GPU smoke: `scripts/e2e_gpu.sbatch`.
+
+## Demo · blog · social
+
+- 🎬 Demo video: _add link_
+- 📓 Blog (Field Notes): _add link_
+- 📣 Social post: _add link_
 
 ## Layout
 

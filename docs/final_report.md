@@ -23,9 +23,9 @@
 
 ## 1. Executive summary
 
-**Dukaan Saathi** is a Hindi‑first, voice + photo assistant that runs a kirana (corner) shop's **inventory and udhaar (credit) ledger** — fully local, no cloud APIs. The shopkeeper **speaks in any language, types in Hinglish/English, or snaps a photo of a challan (supplier bill) or khata (handwritten credit ledger)**; the assistant understands, acts, and replies in Hindi (voice + text).
+**Dukaan Saathi** is a Hindi‑first, voice + photo assistant that runs a kirana (corner) shop's **inventory and udhaar (credit) ledger** — built on open‑weight models (≤32B), self‑hosted on Modal (no proprietary AI APIs). The shopkeeper **speaks in any language, types in Hinglish/English, or snaps a photo of a challan (supplier bill) or khata (handwritten credit ledger)**; the assistant understands, acts, and replies in Hindi (voice + text).
 
-The brain is unchanged — **Gemma‑4‑12B** (Q8_0 GGUF, vision‑capable) served by `llama.cpp` and driven by a **deepagents** (LangGraph) loop with a registry of LangChain tools, plus **faster‑whisper** STT and **MMS‑TTS** speech. The revision **did not change the model**; it made the product *real and safe*:
+The brain is unchanged — **Gemma‑4‑12B** (Q8_0 GGUF, vision‑capable) served by `llama.cpp` and driven by a **deepagents** (LangGraph) loop with a registry of LangChain tools, plus **faster‑whisper** STT and **Veena** (Hindi/Hinglish) TTS. The revision **did not change the model**; it made the product *real and safe*:
 
 - a true **batch/expiry (FEFO)** stock model that matches how a kirana actually works,
 - **robust quantity‑merge** so restocks never create duplicate rows,
@@ -89,7 +89,7 @@ flowchart TD
       INV[(inventory.db - inventory + inventory_lots + purchases)]
       TXN[(transactions.db - customers + sales + ledger + app_meta)]
     end
-    TTS[tts.py - MMS-TTS Hindi]
+    TTS[tts.py - Veena Hindi/Hinglish]
 
     MIC --> SES
     TXT --> SES

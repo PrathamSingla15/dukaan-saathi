@@ -103,6 +103,24 @@ def serve():
         env=env,
     )
 
+    # Pre-load Whisper (STT) + Veena (TTS) in the background at container startup so
+    # the FIRST /stt and /tts calls aren't a cold model load — that lazy load is the
+    # main source of the "voice responds too late" lag. With min_containers>=1 the
+    # warm container then keeps all three models (llama-server, Whisper, Veena)
+    # resident in VRAM, so steady-state voice turns stay snappy.
+    import threading
+
+    def _warm_speech():
+        try:
+            from dukaan import stt as _stt, tts as _tts
+            _stt.warmup()
+            _tts.warmup()
+            print("[modal_app] STT+TTS pre-loaded", flush=True)
+        except Exception as e:  # noqa: BLE001 — warmup is best-effort
+            print(f"[modal_app] speech warmup failed: {e}", flush=True)
+
+    threading.Thread(target=_warm_speech, daemon=True).start()
+
     web = FastAPI()
     llm = httpx.AsyncClient(base_url="http://127.0.0.1:8080", timeout=300.0)
 
