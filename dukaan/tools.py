@@ -251,7 +251,7 @@ def query_database(sql: str) -> str:
     inv.inventory(item_id, name, category, brand, unit, qty, mrp, purchase_price, expiry_date, reorder_level, hsn, supplier)
     inv.suppliers(supplier_id, name, phone, focus)
     inv.purchases(purchase_id, item_id, supplier, qty, cost, ts)   -- restocks; cost = batch total
-    txn.customers(customer_id, name, phone, credit_limit)
+    txn.customers(customer_id, name, phone, credit_limit)   -- name has an "(area)" suffix e.g. "Munna Yadav (auto wale)"; match name LIKE '%X%', NEVER name='X'
     txn.sales(sale_id, item_id, item_name, qty, sale_price, ts, customer_id)   -- item_name = item sold; customer_id NULL = walk-in
     txn.ledger(entry_id, customer_id, type, amount, items, due_date, ts)
         -- udhaar: type='debit' (taken) / 'credit' (repaid). A customer's BAAKI = NET =
@@ -361,15 +361,15 @@ def get_item_detail(item_name: str) -> str:
 
 @tool(parse_docstring=True)
 def get_customer_dues(customer_name: str = "") -> str:
-    """Udhaar (credit) baaki dekhein — ek grahak ka ya sabhi ka kul. NET baaki deta hai (udhaar liya minus wapsi).
+    """Udhaar (credit) baaki dekhein — ek grahak ka YA sabhi ka / top debtors. NET baaki (udhaar liya minus wapsi).
 
-    Har udhaar/baaki sawaal ke liye YEHI tool use karein — including "sabse zyada
-    udhaar kiska hai", "top debtor", "kaun kitna baaki hai" — kyunki yeh har grahak
-    ka SAHI net balance (SUM debit - SUM credit) nikaal kar ghatte kram me sorted
-    deta hai. Iske liye query_database/SQL mat likhein — sirf debit jodne se gross
-    aa jaata hai aur ranking GALAT ho jaati hai.
-    Naam diya ho to us grahak ka balance; khaali ho to poori dukaan ka pending
-    udhaar (total + sabse zyada baaki wale top grahak).
+    HAR udhaar/baaki sawaal ke liye YEHI tool — chahe EK grahak ho ("X ka kitna
+    udhaar / baaki hai") ya sabse zyada / top debtor ("sabse zyada udhaar kiska",
+    "kaun kitna baaki"). Naam doge to us grahak ka NET balance; khaali doge to poori
+    dukaan ka pending udhaar (total + top grahak, ghatte kram me — NET, not gross).
+    Grahak ke naam me aksar "(area)" suffix hota hai (e.g. "Munna Yadav (auto wale)")
+    — yeh tool fuzzy match kar leta hai. Customer ke udhaar ke liye query_database/SQL
+    mat likhein: exact-name match fail ho jaata hai aur debit-only se ranking galat.
 
     Args:
         customer_name: Grahak ka naam (optional). Khaali = sabka summary / top debtors.

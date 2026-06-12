@@ -122,7 +122,7 @@ inv.*  (inventory & stock)
   inv.inventory_lots(lot_id, item_id -> inv.inventory.item_id, qty_received, qty_remaining,
                      expiry_date, is_estimated, received_ts, supplier, purchase_price)
 txn.*  (sales, customers & udhaar/khata)
-  txn.customers(customer_id, name, phone, credit_limit)
+  txn.customers(customer_id, name, phone, credit_limit)   -- name has an "(area)" suffix e.g. "Munna Yadav (auto wale)"; match with name LIKE '%X%', NEVER name='X'
   txn.sales(sale_id, item_id, item_name, qty, sale_price, ts, customer_id -> txn.customers.customer_id)
   txn.ledger(entry_id, customer_id -> txn.customers.customer_id, type, amount, items, due_date, ts)
 
