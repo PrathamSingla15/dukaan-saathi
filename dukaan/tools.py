@@ -254,7 +254,13 @@ def query_database(sql: str) -> str:
     txn.customers(customer_id, name, phone, credit_limit)
     txn.sales(sale_id, item_id, item_name, qty, sale_price, ts, customer_id)   -- item_name = item sold; customer_id NULL = walk-in
     txn.ledger(entry_id, customer_id, type, amount, items, due_date, ts)
-        -- udhaar: type='debit' (taken) / 'credit' (repaid); balance = SUM(debit) - SUM(credit).
+        -- udhaar: type='debit' (taken) / 'credit' (repaid). A customer's BAAKI = NET =
+        -- SUM(debit) - SUM(credit). NEVER rank/compare udhaar by debit alone (gross —
+        -- ignores repayments). For "sabse zyada udhaar / top debtor" prefer
+        -- get_customer_dues; if you must use SQL, rank by NET, e.g.:
+        --   SELECT c.name, SUM(CASE WHEN l.type='debit' THEN l.amount ELSE -l.amount END) bal
+        --   FROM txn.customers c JOIN txn.ledger l ON l.customer_id=c.customer_id
+        --   GROUP BY c.customer_id HAVING bal>0 ORDER BY bal DESC;
     qty = current stock. Money INR (₹). JOIN across freely, e.g.
       SELECT i.name, SUM(s.qty) FROM txn.sales s JOIN inv.inventory i ON i.item_id=s.item_id GROUP BY i.item_id.
     Dates are ISO strings; use date('now') / datetime('now','localtime'). Always SELECT, never write.
@@ -355,13 +361,18 @@ def get_item_detail(item_name: str) -> str:
 
 @tool(parse_docstring=True)
 def get_customer_dues(customer_name: str = "") -> str:
-    """Udhaar (credit) baaki dekhein — ek grahak ka ya sabhi ka kul.
+    """Udhaar (credit) baaki dekhein — ek grahak ka ya sabhi ka kul. NET baaki deta hai (udhaar liya minus wapsi).
 
+    Har udhaar/baaki sawaal ke liye YEHI tool use karein — including "sabse zyada
+    udhaar kiska hai", "top debtor", "kaun kitna baaki hai" — kyunki yeh har grahak
+    ka SAHI net balance (SUM debit - SUM credit) nikaal kar ghatte kram me sorted
+    deta hai. Iske liye query_database/SQL mat likhein — sirf debit jodne se gross
+    aa jaata hai aur ranking GALAT ho jaati hai.
     Naam diya ho to us grahak ka balance; khaali ho to poori dukaan ka pending
-    udhaar (total + top grahak).
+    udhaar (total + sabse zyada baaki wale top grahak).
 
     Args:
-        customer_name: Grahak ka naam (optional). Khaali = sabka summary.
+        customer_name: Grahak ka naam (optional). Khaali = sabka summary / top debtors.
     """
     name = _clean(customer_name)
     if name:

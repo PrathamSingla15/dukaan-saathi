@@ -131,7 +131,10 @@ Notes:
   inv.inventory_lots.qty_remaining). inv.inventory.expiry_date mirrors the EARLIEST open lot;
   use inv.inventory_lots for per-batch expiry/FEFO. margin = mrp - purchase_price.
 - txn.sales.item_name is the item sold (denormalised; also joinable via item_id to inv.inventory).
-- A customer's outstanding udhaar = SUM(amount WHERE type='debit') - SUM(amount WHERE type='credit').
+- A customer's outstanding udhaar (baaki) = NET = SUM(amount WHERE type='debit') - SUM(amount WHERE type='credit').
+  NEVER rank/compare udhaar by debit alone (gross — ignores repayments). For "sabse zyada udhaar":
+    SELECT c.name, SUM(CASE WHEN l.type='debit' THEN l.amount ELSE -l.amount END) bal
+    FROM txn.customers c JOIN txn.ledger l ON l.customer_id=c.customer_id GROUP BY c.customer_id ORDER BY bal DESC;
 - Dates/timestamps are ISO strings; compare with date('now') / datetime('now','localtime').
 - You may JOIN across databases freely, e.g.
     SELECT i.name, SUM(s.qty) FROM txn.sales s JOIN inv.inventory i ON i.item_id=s.item_id GROUP BY i.item_id.
