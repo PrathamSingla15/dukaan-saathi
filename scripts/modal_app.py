@@ -48,11 +48,13 @@ image = (
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
         "DUKAAN_WHISPER_DEVICE": "cuda",
         "DUKAAN_TTS_DEVICE": "cuda",
-        # bf16 Veena (~6GB) — noticeably FASTER autoregressive TTS than 4-bit (bitsandbytes
-        # adds per-layer dequant overhead). The L4 has room: Gemma Q4 ~7 + Whisper ~3 +
-        # Veena bf16 ~6 ≈ 16/24GB. If you bump the LLM to Q6_K and hit a VRAM OOM, set
-        # this back to "true" (4-bit Veena ~3GB) to claw the headroom back.
-        "DUKAAN_VEENA_4BIT": "false",
+        # 4-bit Veena (~3GB) is REQUIRED here, not an optimization: with Gemma Q4 (-ngl 99)
+        # + Whisper large-v3 + the Hindi 2nd-pass Whisper + a 16k KV cache already sitting
+        # near the L4's 24GB, bf16 Veena (~6GB) tips *synthesis* into a VRAM OOM that
+        # silently degrades TTS to EMPTY audio (verified on Modal: bf16 -> a 46-byte silent
+        # WAV in ~1s). Keep 4-bit so TTS produces real speech. (To speed TTS up safely,
+        # stream it sentence-by-sentence in the app rather than widening Veena's dtype.)
+        "DUKAAN_VEENA_4BIT": "true",
         "DUKAAN_DATA_DIR": "/tmp/dukaan-data",
     })
     .entrypoint([])
