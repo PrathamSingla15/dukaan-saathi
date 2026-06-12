@@ -76,20 +76,22 @@ def _load_veena() -> tuple:
 
             quant = BitsAndBytesConfig(
                 load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
+                # fp16 (not bf16) compute: the speech GPU may be a Turing T4, which has
+                # no native bf16 — bf16 there throws "float != BFloat16" mid-generation.
+                bnb_4bit_compute_dtype=torch.float16, bnb_4bit_use_double_quant=True,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("Veena 4-bit requested but unavailable (%s); using bf16.", exc)
 
     if quant is not None:
-        # Keep device_map="auto". On the shared L4 (llama-server + 2x Whisper fill
-        # most of the 24GB) this is the ONLY config that produces any audio: forcing
-        # Veena fully onto the GPU (device_map={"":0}) OOMs generation into SILENCE,
-        # and bf16 does too. "auto" CPU-offloads under pressure → slow + can truncate
-        # long replies, but short replies speak. The real fix is more VRAM (a bigger
-        # GPU like A100-40GB, or a separate GPU for speech) — see docs/deploy notes.
+        # dtype=float16 pins the NON-quantized modules (embeddings / norms / lm_head)
+        # to fp16 too, so every matmul operand matches the fp16 4-bit compute dtype.
+        # Without it the embeddings stay float32 and Veena dies with
+        # "float != BFloat16/Half" mid-generation (silent audio). On the dedicated
+        # speech GPU 4-bit Veena (~3GB) sits fully on-device, so device_map="auto"
+        # keeps it on-GPU (no CPU offload, no OOM); fp16 is also native on a T4.
         model = AutoModelForCausalLM.from_pretrained(
-            config.VEENA_MODEL, quantization_config=quant,
+            config.VEENA_MODEL, quantization_config=quant, dtype=torch.float16,
             device_map="auto", trust_remote_code=True)
     else:
         model = AutoModelForCausalLM.from_pretrained(
