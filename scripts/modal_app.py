@@ -1,24 +1,29 @@
-"""ALL Dukaan Saathi GPU models on ONE Modal GPU (L4): Gemma LLM + vision (llama.cpp),
-faster-whisper STT, and Veena TTS — exposed as a single FastAPI app so the HF Space
-can run on free CPU and call this for everything (1 warm GPU = 1x credit cost).
+"""Dukaan Saathi GPU services on Modal, SPLIT across two GPUs so neither starves:
 
-    GET  /health                  -> readiness (also satisfies dukaan.llm.health)
-    *    /v1/...                   -> proxied to the in-container llama-server (OpenAI API)
-    POST /stt   {sr, audio:[...]}  -> {"text","language","confidence","no_speech","ok","reason"}
-    POST /tts   {"text": "..."}    -> WAV bytes (audio/wav), header x-sample-rate
+    serve         (L4)  -> the LLM + vision/OCR  (llama.cpp llama-server)
+        GET  /health
+        *    /v1/...                    -> OpenAI Chat Completions (+ vision via image_url)
+    serve_speech  (T4)  -> STT (faster-whisper) + TTS (Veena)
+        GET  /health
+        POST /stt   {sr, audio:[...]}   -> {"text","language","confidence","no_speech","ok","reason"}
+        POST /tts   {"text": "..."}     -> WAV bytes (audio/wav), header x-sample-rate
 
-Deploy (reuses app 'dukaan-llm', so the URL stays the same as the LLM-only one):
-    modal deploy scripts/modal_app.py
-    #   LLM:  https://<workspace>--dukaan-llm-serve.modal.run/v1
-    #   STT:  https://<workspace>--dukaan-llm-serve.modal.run/stt
-    #   TTS:  https://<workspace>--dukaan-llm-serve.modal.run/tts
+Why split: a single L4 (24GB) cannot hold Gemma-12B (`-ngl 99`) + 2x Whisper + Veena
+on-GPU at once. Veena gets VRAM-starved — `device_map="auto"` CPU-offloads it (~3 tok/s,
+truncated audio) and forcing it onto the GPU OOMs into a *silent* 46-byte WAV. A dedicated
+**T4 (16GB)** for speech (Whisper ~4.5GB + Veena 4-bit ~3GB) runs both fully on-GPU, fast +
+complete, while the LLM keeps the L4 to itself.
 
-Veena is GATED → the container needs an HF token. Create a Modal secret first:
-    modal secret create huggingface HF_TOKEN=hf_xxxxxxxx   (token with gated-read access)
+Deploy (one app, two web functions -> two URLs):
+    MODAL_PROFILE=projects-ps MIN_CONTAINERS=1 PYTHONPATH="$PWD" modal deploy scripts/modal_app.py
+    #   LLM:      https://<ws>--dukaan-llm-serve.modal.run/v1
+    #   STT/TTS:  https://<ws>--dukaan-llm-serve-speech.modal.run/{stt,tts}
+Point the Space at BOTH (Settings -> Variables/secrets):
+    DUKAAN_LLM_BASE_URL = https://<ws>--dukaan-llm-serve.modal.run/v1
+    DUKAAN_STT_BASE_URL = https://<ws>--dukaan-llm-serve-speech.modal.run/stt
+    DUKAAN_TTS_BASE_URL = https://<ws>--dukaan-llm-serve-speech.modal.run/tts
 
-Reuses dukaan.stt / dukaan.tts directly (no logic duplicated). The same code runs in
-the Space too: there STT/TTS route to this endpoint via DUKAAN_STT_BASE_URL /
-DUKAAN_TTS_BASE_URL; here those are unset, so the models run locally on the GPU.
+Veena is GATED -> the speech container needs an HF token (Modal secret "huggingface").
 """
 import os
 import subprocess
@@ -26,7 +31,8 @@ import subprocess
 import modal
 
 MIN = 60
-GPU = os.environ.get("MODAL_GPU", "L4")           # 24 GB: Gemma Q4 ~7 + Whisper ~3 + Veena ~6
+LLM_GPU = os.environ.get("MODAL_GPU", "L4")               # LLM + vision/OCR
+SPEECH_GPU = os.environ.get("MODAL_SPEECH_GPU", "T4")     # STT + TTS, dedicated (16GB is plenty)
 MIN_CONTAINERS = int(os.environ.get("MIN_CONTAINERS", "1"))
 CACHE = "/cache"
 LLM_REPO = os.environ.get("LLM_REPO", "ggml-org/gemma-4-12B-it-GGUF")
@@ -43,53 +49,45 @@ image = (
         "faster-whisper", "transformers>=5.10.1", "torch", "snac",
         "soundfile", "scipy", "numpy<2.2", "uroman",
     )
-    .pip_install("bitsandbytes", "accelerate")   # 4-bit Veena (separate layer keeps the big one cached)
+    .pip_install("bitsandbytes", "accelerate")   # 4-bit Veena
     .env({
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
         "DUKAAN_WHISPER_DEVICE": "cuda",
         "DUKAAN_TTS_DEVICE": "cuda",
-        # 4-bit Veena (~3GB) is REQUIRED here, not an optimization: with Gemma Q4 (-ngl 99)
-        # + Whisper large-v3 + the Hindi 2nd-pass Whisper + a 16k KV cache already sitting
-        # near the L4's 24GB, bf16 Veena (~6GB) tips *synthesis* into a VRAM OOM that
-        # silently degrades TTS to EMPTY audio (verified on Modal: bf16 -> a 46-byte silent
-        # WAV in ~1s). Keep 4-bit so TTS produces real speech. (To speed TTS up safely,
-        # stream it sentence-by-sentence in the app rather than widening Veena's dtype.)
+        # 4-bit Veena (~3GB) sits fully on the dedicated T4 (no llama-server competing),
+        # so device_map="auto" keeps it on-GPU -> fast + complete (no CPU offload, no OOM).
         "DUKAAN_VEENA_4BIT": "true",
         "DUKAAN_DATA_DIR": "/tmp/dukaan-data",
     })
     .entrypoint([])
-    .add_local_python_source("dukaan")   # reuse dukaan.stt / dukaan.tts — must be the LAST image step
+    .add_local_python_source("dukaan")   # reuse dukaan.stt / dukaan.tts — must be LAST
 )
 hf_cache = modal.Volume.from_name("dukaan-hf-cache", create_if_missing=True)
 
 
+# ============================================================ LLM + vision (L4)
 @app.function(
     image=image,
-    gpu=GPU,
+    gpu=LLM_GPU,
     volumes={CACHE: hf_cache},
     timeout=24 * MIN * MIN,            # 24h max; Modal rolling-replaces at the boundary
-    min_containers=MIN_CONTAINERS,     # keep 1 warm → continuous
+    min_containers=MIN_CONTAINERS,
     scaledown_window=10 * MIN,
-    secrets=[modal.Secret.from_name("huggingface")],   # HF_TOKEN for gated Veena
+    secrets=[modal.Secret.from_name("huggingface")],
 )
 @modal.concurrent(max_inputs=24)
 @modal.asgi_app()
 def serve():
-    import io
+    """Gemma LLM + vision/OCR via the llama.cpp llama-server on the L4."""
     import httpx
-    import numpy as np
-    import soundfile as sf
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse, Response
     from huggingface_hub import hf_hub_download
 
-    # --- start the llama-server sidecar (LLM + vision OCR) on localhost:8080 ---
     gguf = hf_hub_download(LLM_REPO, LLM_FILE, local_dir=CACHE)
     mmproj = hf_hub_download(LLM_REPO, LLM_MMPROJ, local_dir=CACHE)
     hf_cache.commit()
 
-    # The official llama.cpp image keeps the binary at /app (NOT on PATH), so find
-    # it robustly and put its dir on LD_LIBRARY_PATH (it links sibling .so files).
     import shutil
     binpath = shutil.which("llama-server")
     if not binpath:
@@ -108,24 +106,6 @@ def serve():
          "--port", "8080", "-c", LLM_CTX, "-ngl", "99", "--jinja"],
         env=env,
     )
-
-    # Pre-load Whisper (STT) + Veena (TTS) in the background at container startup so
-    # the FIRST /stt and /tts calls aren't a cold model load — that lazy load is the
-    # main source of the "voice responds too late" lag. With min_containers>=1 the
-    # warm container then keeps all three models (llama-server, Whisper, Veena)
-    # resident in VRAM, so steady-state voice turns stay snappy.
-    import threading
-
-    def _warm_speech():
-        try:
-            from dukaan import stt as _stt, tts as _tts
-            _stt.warmup()
-            _tts.warmup()
-            print("[modal_app] STT+TTS pre-loaded", flush=True)
-        except Exception as e:  # noqa: BLE001 — warmup is best-effort
-            print(f"[modal_app] speech warmup failed: {e}", flush=True)
-
-    threading.Thread(target=_warm_speech, daemon=True).start()
 
     web = FastAPI()
     llm = httpx.AsyncClient(base_url="http://127.0.0.1:8080", timeout=300.0)
@@ -148,9 +128,53 @@ def serve():
         return Response(content=r.content, status_code=r.status_code,
                         media_type=r.headers.get("content-type", "application/json"))
 
+    return web
+
+
+# ============================================================ STT + TTS (T4)
+@app.function(
+    image=image,
+    gpu=SPEECH_GPU,
+    timeout=24 * MIN * MIN,
+    min_containers=MIN_CONTAINERS,
+    scaledown_window=10 * MIN,
+    secrets=[modal.Secret.from_name("huggingface")],
+)
+@modal.concurrent(max_inputs=8)
+@modal.asgi_app()
+def serve_speech():
+    """faster-whisper STT + Veena TTS on a dedicated T4 — no llama-server, so both
+    models run fully on-GPU (fast + complete) without competing with the LLM."""
+    import io
+    import threading
+
+    import numpy as np
+    import soundfile as sf
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse, Response
+
+    # Pre-load both speech models at container startup so the first /stt and /tts
+    # calls aren't a cold model load (≈27s STT / ≈75s TTS otherwise).
+    def _warm():
+        try:
+            from dukaan import stt as _stt, tts as _tts
+            _stt.warmup()
+            _tts.warmup()
+            print("[modal_app] STT+TTS pre-loaded on the speech GPU", flush=True)
+        except Exception as e:  # noqa: BLE001 — warmup is best-effort
+            print(f"[modal_app] speech warmup failed: {e}", flush=True)
+
+    threading.Thread(target=_warm, daemon=True).start()
+
+    web = FastAPI()
+
+    @web.get("/health")
+    async def health():
+        return JSONResponse({"ok": True, "speech": True})
+
     @web.post("/stt")
     async def stt(request: Request):
-        from dukaan import stt as _stt   # imported here so model loads lazily on first call
+        from dukaan import stt as _stt   # model loads lazily / from the warm pre-load
         p = await request.json()
         arr = np.asarray(p.get("audio", []), dtype=np.float32)
         res = _stt.transcribe((int(p.get("sr", 16000)), arr), language=p.get("language"))

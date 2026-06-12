@@ -27,6 +27,16 @@ Non-obvious gotchas hit while building, with the fix, so they don't recur.
   So (a) force the agent to reply in Devanagari, and (b) convert digits/₹ to Hindi number words
   (`numwords.py`) before TTS, since MMS can't pronounce Latin digits. `num2words` has no Hindi.
 - faster-whisper needs no system ffmpeg (PyAV bundles it) and takes a numpy 16k float32 array.
+- **Veena TTS on Modal: keep 4-bit (`DUKAAN_VEENA_4BIT=true`) — it's a VRAM fit, not an optimization.**
+  bf16 Veena (~6GB) OOMs during *synthesis* alongside Gemma Q4 (`-ngl 99`) + Whisper large-v3 + the
+  Hindi 2nd-pass Whisper + a 16k KV cache on the L4 (24GB), and the OOM degrades **silently** to empty
+  audio (a 46-byte WAV, ~1s, HTTP 200). A fast `200 OK` is NOT proof TTS works — verify the WAV has real
+  samples (`duration>1s`, `rms>0.01`), never just the status/timing. To speed TTS up, stream it
+  sentence-by-sentence in the app; don't widen Veena's dtype.
+- **Modal STT/TTS cold-start:** the models lazy-load on the first `/stt`,`/tts` call (≈27s/75s). Pre-load
+  them in a daemon thread at container startup (`scripts/modal_app.py` `_warm_speech`) + `min_containers=1`
+  so a warm container has all three models resident; warm STT ≈1.2s. Pre-warm before a demo with
+  `scripts/prewarm.py <modal-url>`.
 
 ## Environment (vitallab2)
 - The `hf` / `huggingface-cli` at `~/.local/bin` is **broken** (`ModuleNotFoundError: huggingface_hub`).
