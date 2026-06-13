@@ -15,12 +15,21 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
 from dukaan import config
 
 log = logging.getLogger("dukaan.surya")
+
+# Circuit breaker: surya-ocr-2 on llama.cpp occasionally enters a generation loop
+# that wedges the backend. After a couple of consecutive failures we skip Surya for
+# a cooldown so the OCR flow never keeps paying the timeout — it self-heals on retry.
+_FAILS = 0
+_COOLDOWN_UNTIL = 0.0
+_MAX_FAILS = 2
+_COOLDOWN_S = 120.0
 
 # Cap the image we send (Surya is a doc-OCR VLM; right-sized images read fine and
 # the base64 payload over the tunnel stays small).
@@ -49,11 +58,20 @@ def _to_jpeg_b64(image: Any) -> str | None:
         return None
 
 
+def _looks_degenerate(text: str) -> bool:
+    """True if the OCR text looks like a repetition loop (don't feed garbage to the LLM)."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    return len(lines) >= 4 and len(set(lines)) * 2 <= len(lines)
+
+
 def ocr_text(image: Any) -> str:
     """Return Surya's recognized text for ``image``, or ``""`` (no-op) when Surya is
-    not configured / unreachable. Never raises."""
+    not configured / unreachable / slow / degenerate. Never raises."""
+    global _FAILS, _COOLDOWN_UNTIL
     base = (config.SURYA_BASE_URL or "").strip()
     if not base or image is None:
+        return ""
+    if time.time() < _COOLDOWN_UNTIL:   # circuit open — skip Surya, go Gemma-only
         return ""
     b64 = _to_jpeg_b64(image)
     if not b64:
@@ -63,7 +81,17 @@ def ocr_text(image: Any) -> str:
 
         r = httpx.post(base, json={"image_b64": b64}, timeout=_TIMEOUT)
         r.raise_for_status()
-        return (r.json().get("text") or "").strip()
+        text = (r.json().get("text") or "").strip()
+        _FAILS = 0
+        if not text or _looks_degenerate(text):
+            return ""   # drop empty / looped output rather than mislead the LLM
+        return text
     except Exception as exc:  # noqa: BLE001 — OCR grounding is best-effort
-        log.warning("Surya OCR call failed (%s); continuing without it.", exc)
+        _FAILS += 1
+        if _FAILS >= _MAX_FAILS:
+            _COOLDOWN_UNTIL = time.time() + _COOLDOWN_S
+            _FAILS = 0
+            log.warning("Surya OCR unhealthy; skipping it for %ss.", int(_COOLDOWN_S))
+        else:
+            log.warning("Surya OCR call failed (%s); continuing without it.", exc)
         return ""

@@ -191,6 +191,7 @@ def ocr_image(
 
     if hint and hint.strip():
         prompt = f"{prompt}\n\nExtra context / hint: {hint.strip()}"
+    prompt = _with_surya(prompt, image)   # Surya OCR pre-pass grounds the read (chat photo etc.)
 
     try:
         raw = llm.vision_extract(image, prompt).strip()

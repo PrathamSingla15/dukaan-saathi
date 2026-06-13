@@ -107,6 +107,9 @@ TTS_BASE_URL = _env("DUKAAN_TTS_BASE_URL", "")
 # through this OCR endpoint FIRST and the recognized text is added to the vision
 # prompt as grounding. Unset (default) = skip Surya, Gemma vision reads the image alone.
 SURYA_BASE_URL = _env("DUKAAN_SURYA_BASE_URL", "")
+# Fail fast: if Surya is slow/unreachable, drop the pre-pass and let Gemma read the
+# image alone rather than make the owner wait (the grounding is best-effort).
+SURYA_REQUEST_TIMEOUT = float(_env("DUKAAN_SURYA_REQUEST_TIMEOUT", "20"))
 
 # ------------------------------------------------------------------------ Gradio
 GRADIO_HOST = _env("DUKAAN_GRADIO_HOST", "0.0.0.0")
