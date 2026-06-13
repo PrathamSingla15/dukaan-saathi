@@ -604,6 +604,25 @@ body.lang-hi .block-en { display: none; }
 .dk-trace__step .ph { color: var(--brass); }
 .dk-trace__step .i18n-hi { font-family: var(--deva); }
 
+/* ---------- chat sessions: New Chat row + past-chat chips --------------- */
+.dk-chatbar { justify-content: flex-end; margin-bottom: 4px; }
+.dk-chats {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 7px;
+  margin: 0 2px 12px; font-family: var(--serif);
+}
+.dk-chats__lab { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); letter-spacing: .02em; }
+.dk-chats__lab .ph { color: var(--brass); margin-right: 3px; vertical-align: -0.1em; }
+.dk-chats__lab .i18n-hi { font-family: var(--deva); }
+.dk-chatchip {
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  background: #fffaf0; border: 1.5px solid var(--paper-line); border-radius: 999px;
+  padding: 4px 11px; box-shadow: var(--sh-1); max-width: 220px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dk-chatchip:hover { border-color: var(--marigold); color: var(--ink); transform: translateY(-1px); box-shadow: var(--sh-2); }
+.dk-chatchip .ph { color: var(--brass); }
+
 /* khata: hint the reminder pill on hover too (not just on select) so it's discoverable */
 .dk-khata-row:hover .dk-remind-btn { display: inline-flex; opacity: .65; }
 .dk-khata-row.dk-row--selected .dk-remind-btn,

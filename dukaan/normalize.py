@@ -39,18 +39,27 @@ _OCR_PROMPT = (
     "Output only the plain-text list, no preamble."
 )
 
-# Challan prompt: return ONLY a JSON array of line items.
+# Challan prompt: return ONLY one JSON object of line items (one-shot grounded).
 _CHALLAN_PROMPT = (
-    "You are reading a supplier bill / challan / invoice — it may be printed or handwritten. "
-    "Return ONLY valid JSON with this structure (no preamble, no explanation, no markdown):\n"
+    "You are reading a supplier bill / challan / invoice from an Indian kirana store. "
+    "It may be printed or handwritten (Hindi / Hinglish / English), and digits may be "
+    "Hindi (०१२३४) or English.\n"
+    "Return ONLY one valid JSON object (no preamble, no explanation, no markdown fences):\n"
     '{"supplier": "<name or null>", "date": "<YYYY-MM-DD or null>", '
     '"items": [{"name": "<string>", "qty": <number>, "unit": "<string or null>", '
     '"rate": <number or null>, "mrp": <number or null>, "hsn": "<string or null>"}]}\n'
     "Rules:\n"
-    "- All quantities and prices MUST be numbers (not strings).\n"
-    "- Omit fields that are not visible in the image (do not guess).\n"
-    "- If supplier or date cannot be read, set them to null.\n"
-    "- Output nothing except the JSON object."
+    "- Output ONE object per line item on the bill — read every row, top to bottom.\n"
+    "- Transcribe each item name exactly as written (keep its original script/spelling).\n"
+    "- qty, rate and mrp MUST be numbers (not strings); convert Hindi digits to English numbers.\n"
+    "- rate = per-unit purchase price; mrp = printed retail price; omit either if not shown.\n"
+    "- Omit / null any field you cannot clearly read — do NOT guess.\n"
+    "- supplier and date are null unless clearly printed/written.\n"
+    "Example output:\n"
+    '{"supplier": "Sri Ram Traders", "date": "2026-06-10", "items": ['
+    '{"name": "Parle-G 100g", "qty": 24, "unit": "pcs", "rate": 4.5, "mrp": 5, "hsn": null}, '
+    '{"name": "Tata Salt 1kg", "qty": 10, "unit": "pkt", "rate": 22, "mrp": 28, "hsn": null}]}\n'
+    "Output nothing except the JSON object."
 )
 
 # Khata prompt: return ONLY a JSON object for a handwritten credit ledger.
@@ -279,7 +288,8 @@ def parse_challan(image: Any, supplier_hint: str | None = None) -> dict:
         prompt = f"{prompt}\n\nExpected supplier name hint: {supplier_hint.strip()}"
 
     try:
-        raw = llm.vision_extract(image, prompt).strip()
+        raw = llm.vision_extract(image, prompt, max_tokens=2048,
+                                 response_format={"type": "json_object"}).strip()
     except Exception:
         return {"ok": False, "supplier": None, "date": None,
                 "lines": [], "raw": "", "error": "reupload"}
@@ -331,7 +341,8 @@ def parse_khata(image: Any) -> dict:
         }
     """
     try:
-        raw = llm.vision_extract(image, _KHATA_PROMPT).strip()
+        raw = llm.vision_extract(image, _KHATA_PROMPT, max_tokens=2048,
+                                 response_format={"type": "json_object"}).strip()
     except Exception:
         return {"ok": False, "customers": [], "raw": "", "error": "reupload"}
 

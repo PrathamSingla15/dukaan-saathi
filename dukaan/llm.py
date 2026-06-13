@@ -79,37 +79,86 @@ def complete(prompt: str, system: str | None = None, **kw: Any) -> str:
 
 
 # ------------------------------------------------------------------------- vision
+# Cap the longest edge sent to the vision model. Phone photos are often 3000-4000px;
+# a small (≤12B) vision model reads a right-sized image MORE accurately than a giant
+# one, and the base64 payload shrinks a lot. Never upscales (PIL.thumbnail downscales).
+_VISION_MAX_EDGE = 1600
+
+
+def _preprocess_for_vision(img):
+    """Auto-orient, right-size and gently sharpen a PIL image for OCR.
+
+    EXIF auto-rotate (phone bills are frequently sideways), downscale to
+    ``_VISION_MAX_EDGE``, and a mild contrast/sharpness bump so faint ink / thermal
+    print reads better. Conservative on purpose — a clean image stays clean.
+    """
+    from PIL import ImageEnhance, ImageOps
+
+    img = ImageOps.exif_transpose(img)                    # honour camera rotation
+    img = img.convert("RGB")
+    img.thumbnail((_VISION_MAX_EDGE, _VISION_MAX_EDGE))   # in-place, downscale only
+    img = ImageEnhance.Contrast(img).enhance(1.12)
+    img = ImageEnhance.Sharpness(img).enhance(1.10)
+    return img
+
+
 def _image_to_data_uri(image: "Any") -> str:
-    """Accept a PIL.Image, raw bytes, or a path; return a base64 data URI."""
-    if isinstance(image, (str, Path)):
-        p = Path(image)
-        data = p.read_bytes()
-        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-                "webp": "image/webp", "gif": "image/gif"}.get(p.suffix.lower().lstrip("."), "image/png")
-    elif isinstance(image, (bytes, bytearray)):
-        data, mime = bytes(image), "image/png"
-    else:  # assume PIL.Image.Image
+    """Accept a PIL.Image, raw bytes, or a path; auto-orient + right-size; return a
+    base64 JPEG data URI. Falls back to a raw passthrough if PIL can't open it."""
+    from PIL import Image
+
+    try:
+        if isinstance(image, (str, Path)):
+            img = Image.open(image)
+        elif isinstance(image, (bytes, bytearray)):
+            img = Image.open(io.BytesIO(bytes(image)))
+        else:                       # assume PIL.Image.Image
+            img = image
+        img = _preprocess_for_vision(img)
         buf = io.BytesIO()
-        image.convert("RGB").save(buf, format="JPEG", quality=92)
-        data, mime = buf.getvalue(), "image/jpeg"
-    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+        img.save(buf, format="JPEG", quality=90)
+        return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    except Exception:  # noqa: BLE001 — last resort: send the bytes we were given
+        if isinstance(image, (bytes, bytearray)):
+            raw = bytes(image)
+        elif isinstance(image, (str, Path)):
+            raw = Path(image).read_bytes()
+        else:
+            raise
+        return f"data:image/png;base64,{base64.b64encode(raw).decode()}"
 
 
 def vision_extract(image: "Any", prompt: str, temperature: float = 0.0,
-                   max_tokens: int = 1024) -> str:
+                   max_tokens: int = 1024, response_format: dict | None = None) -> str:
     """Send an image + instruction to Gemma-4's vision path; return the text reply.
-    `image` may be a PIL image, bytes, or a file path."""
+
+    `image` may be a PIL image, bytes, or a file path. Pass
+    ``response_format={"type": "json_object"}`` to force well-formed JSON (used by
+    the challan / khata OCR); if the endpoint doesn't support it the call is retried
+    once without it, so OCR still works (free-text + salvage parse).
+    """
     content = [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": _image_to_data_uri(image)}},
     ]
-    resp = raw_client().chat.completions.create(
-        model=config.LLM_MODEL,
-        messages=[{"role": "user", "content": content}],
-        temperature=temperature, max_tokens=max_tokens,
-        extra_body=_extra_body(),
-    )
-    return (resp.choices[0].message.content or "").strip()
+
+    def _call(rf: dict | None) -> str:
+        kw: dict = {"extra_body": _extra_body()}
+        if rf is not None:
+            kw["response_format"] = rf
+        resp = raw_client().chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=[{"role": "user", "content": content}],
+            temperature=temperature, max_tokens=max_tokens, **kw,
+        )
+        return (resp.choices[0].message.content or "").strip()
+
+    try:
+        return _call(response_format)
+    except Exception:
+        if response_format is not None:
+            return _call(None)      # endpoint lacks response_format -> degrade gracefully
+        raise
 
 
 # --------------------------------------------------------------------- health/wait

@@ -20,8 +20,9 @@ Design notes
   ``receiving``) plus ``proactive`` (reminder drafts) and ``config`` / ``db``.
   Heavy models load lazily inside those modules — nothing ML at import time.
 - English is the default chrome; the toggle flips every label to Hindi instantly
-  (client-side). The *assistant's replies* stay Hindi — that is the backend's
-  voice today (a deliberate Hindi-first prompt choice), surfaced intentionally.
+  (client-side) AND drives the assistant's reply language per turn — a hidden
+  ``#dk-lang-state`` textbox carries "en"/"hi" to the backend, so toggling
+  mid-chat switches the reply language too. Default: English.
 """
 
 from __future__ import annotations
@@ -862,16 +863,13 @@ def _parse_composer(mm) -> tuple[str, object, object]:
             except Exception:  # noqa: BLE001 — bad upload shouldn't crash the turn
                 pass
         elif ext in _AUD_EXT and audio is None:
-            try:
-                import soundfile as sf
-                data, sr = sf.read(path, dtype="float32")
-                audio = (sr, data)
-            except Exception:  # noqa: BLE001
-                pass
+            # The browser mic records webm/opus, which soundfile can't read — decode
+            # via the robust seam (soundfile -> PyAV) so voice notes actually send.
+            audio = session.decode_audio(path)
     return text, image, audio
 
 
-def respond(mm, history, thread_id):
+def respond(mm, history, thread_id, reply_lang="en"):
     """One shopkeeper turn from the chat composer (text / voice / image).
 
     Replies are SILENT by default (no inline TTS) — each bot bubble carries a
@@ -904,7 +902,7 @@ def respond(mm, history, thread_id):
     pend_vis = False
     last_len = 0
     for tr in session.handle_turn_stream(audio=audio, text=text or None, image=image,
-                                         thread_id=thread_id, tts=False):
+                                         thread_id=thread_id, tts=False, reply_lang=reply_lang):
         if tr.user_text:
             history[ui]["text"] = tr.user_text
         if tr.detected_language:
@@ -947,16 +945,92 @@ def confirm(answer, thread_id, history):
 
 
 def speak(idx, history):
-    """On-demand TTS for one bot message (by chat index) → plays in audio_out.
+    """On-demand STREAMING TTS for one bot message (by chat index) → audio_out.
 
-    ``idx`` arrives as ``"<index>|<nonce>"`` (the nonce guarantees the textbox
-    value changes on every click, so repeat-listens still fire the event).
+    A generator: yields one ``(sr, ndarray)`` per sentence so the speaker starts
+    playing within ~1-2s instead of after the whole reply is synthesized. ``idx``
+    arrives as ``"<index>|<nonce>"`` (the nonce guarantees the textbox value
+    changes on every click, so repeat-listens still fire the event).
     """
     try:
         text = (history or [])[int(str(idx).split("|")[0])].get("text", "")
     except (TypeError, ValueError, IndexError, AttributeError):
-        return None
-    return session.speak(text) if (text and text.strip()) else None
+        return
+    if not (text and text.strip()):
+        return
+    for chunk in session.speak_stream(text):
+        yield chunk
+
+
+# ---- chat sessions (New Chat + revisitable past chats) ---------------------
+def _chat_title(history) -> str:
+    """A short title for a chat = its first owner message, truncated."""
+    for m in (history or []):
+        if m.get("role") == "user":
+            t = (m.get("text") or "").strip()
+            if t:
+                return t[:28] + ("…" if len(t) > 28 else "")
+    return ""
+
+
+def chats_html(chats) -> str:
+    """Render this session's PAST chats as tappable chips (newest first).
+
+    Each chip carries ``data-chat="<thread_id>"``; head.html's delegated listener
+    opens it via the hidden bridge. Empty list → empty strip (no chrome)."""
+    chats = chats or []
+    if not chats:
+        return ""
+    chips = "".join(
+        f'<span class="dk-chatchip" data-chat="{_esc(c.get("id"))}" role="button" '
+        f'title="{_esc(T("Open", "खोलें"))}">{ic("clock-counter-clockwise")} '
+        f'{_esc(c.get("title") or T("Chat", "बातचीत"))}</span>'
+        for c in reversed(chats)
+    )
+    return (f'<div class="dk-chats"><span class="dk-chats__lab">{ic("chats-circle")} '
+            f'{T("Past chats", "पुरानी बातचीत")}</span>{chips}</div>')
+
+
+def new_chat(chats, history, thread_id):
+    """Archive the current chat and start a fresh one (a brand-new agent context).
+
+    The previous transcript is kept in ``chats`` (and its messages stay in the
+    agent's InMemorySaver under the old thread_id), so it can be reopened.
+    Returns ``(chats, history, thread_id, chat, chats_bar, confirm_row, audio_out)``.
+    """
+    chats = list(chats or [])
+    history = list(history or [])
+    if history:
+        chats = [c for c in chats if c.get("id") != thread_id]
+        chats.append({"id": thread_id, "title": _chat_title(history), "history": history})
+    new_tid = uuid.uuid4().hex
+    return (chats, [], new_tid, chat_html([]), chats_html(chats),
+            gr.update(visible=False), None)
+
+
+def open_chat(token, chats, history, thread_id):
+    """Reopen a past chat: archive the active one, restore the selected one.
+
+    ``token`` arrives as ``"<thread_id>|<nonce>"`` from a chat chip. The old
+    thread's messages still live in the agent's InMemorySaver, so the reopened
+    chat resumes with full context. Returns
+    ``(chats, history, thread_id, chat, chats_bar, confirm_row)``.
+    """
+    chats = list(chats or [])
+    history = list(history or [])
+    target_id = str(token or "").split("|")[0].strip()
+    if not target_id:
+        return (chats, history, thread_id, chat_html(history), chats_html(chats),
+                gr.update(visible=False))
+    # archive the currently-active chat (if it has content and isn't the target)
+    if history and thread_id != target_id and not any(c.get("id") == thread_id for c in chats):
+        chats.append({"id": thread_id, "title": _chat_title(history), "history": history})
+    target = next((c for c in chats if c.get("id") == target_id), None)
+    chats = [c for c in chats if c.get("id") != target_id]
+    new_hist = list((target or {}).get("history", [])) if target else history
+    new_tid = target_id if target else thread_id
+    return (chats, new_hist, new_tid, chat_html(new_hist), chats_html(chats),
+            gr.update(visible=False))
 
 
 def refresh_dashboard():
@@ -1088,6 +1162,7 @@ def build_ui() -> gr.Blocks:
                    analytics_enabled=False) as demo:
         thread_id = gr.State(lambda: uuid.uuid4().hex)
         history = gr.State([])
+        chats = gr.State([])          # this session's PAST chats (for New Chat / reopen)
         preview = gr.State(None)
 
         with gr.Column(elem_classes=["dk-shell"]):
@@ -1113,6 +1188,9 @@ def build_ui() -> gr.Blocks:
             with gr.Column(elem_id="page-talk", elem_classes=["dk-page"]):
                 _panel(_secthead(ic("microphone"), "Talk to your Saathi", "साथी से बात करें",
                                  meta=_page_date_meta()))
+                with gr.Row(elem_classes=["dk-btnrow", "dk-chatbar"]):
+                    new_chat_btn = _btn(ic("plus-circle") + " " + T("New chat", "नई बातचीत"), kind="ghost")
+                chats_bar = _panel(chats_html([]), elem_id="dk-chats-bar")
                 chat = _panel(chat_html([]), elem_id="dk-chat-panel")
                 with gr.Row(visible=False, elem_classes=["dk-btnrow"]) as confirm_row:
                     haan_btn = _btn(ic("check") + " " + T("Yes", "हाँ"), kind="primary")
@@ -1129,7 +1207,10 @@ def build_ui() -> gr.Blocks:
                 )
                 _panel(f'<div class="dk-hint">{ic("speaker-high")} '
                        f'{T("Replies are silent · tap the speaker on any reply to hear it.", "जवाब बिना आवाज़ के आते हैं · सुनने के लिए किसी जवाब पर स्पीकर दबाएँ।")}</div>')
-                audio_out = gr.Audio(autoplay=True, show_label=False, elem_id="dk-audio-out")
+                # streaming=True: speak() yields one sentence at a time, so audio
+                # starts within ~1-2s and plays the chunks back-to-back as they arrive.
+                audio_out = gr.Audio(streaming=True, autoplay=True, show_label=False,
+                                     elem_id="dk-audio-out")
                 # hidden bridge: a message's speaker icon → JS writes "<idx>|<nonce>"
                 # here and fires its input event → speak() synthesizes just that
                 # message → audio_out. NB: CSS-hidden (not visible=False) — Gradio 6
@@ -1137,6 +1218,15 @@ def build_ui() -> gr.Blocks:
                 speak_idx = gr.Textbox(show_label=False, container=False,
                                        elem_id="dk-speak-idx", elem_classes=["dk-hidden"])
                 speak_btn = gr.Button("speak", elem_id="dk-speak-btn", elem_classes=["dk-hidden"])
+                # hidden bridge: the EN/हिं toggle (head.html) writes "en"/"hi" here so
+                # the backend sets each reply's language (default English; live toggle).
+                lang_state = gr.Textbox(value="en", show_label=False, container=False,
+                                        elem_id="dk-lang-state", elem_classes=["dk-hidden"])
+                # hidden bridge: a past-chat chip writes "<id>|<nonce>" here + clicks the
+                # button → open_chat() restores that conversation.
+                openchat_id = gr.Textbox(show_label=False, container=False,
+                                         elem_id="dk-openchat-id", elem_classes=["dk-hidden"])
+                openchat_btn = gr.Button("open", elem_id="dk-openchat-btn", elem_classes=["dk-hidden"])
 
             # ---------------------------------------------------------- KHATA
             with gr.Column(elem_id="page-khata", elem_classes=["dk-page"]):
@@ -1222,7 +1312,7 @@ def build_ui() -> gr.Blocks:
         # ===================================================== wiring
         # Talk
         turn_out = [chat, audio_out, dash, confirm_row, composer, history]
-        composer.submit(respond, [composer, history, thread_id], turn_out)
+        composer.submit(respond, [composer, history, thread_id, lang_state], turn_out)
 
         conf_out = [chat, audio_out, dash, confirm_row, history]
         haan_btn.click(lambda tid, h: confirm("haan", tid, h),
@@ -1230,7 +1320,14 @@ def build_ui() -> gr.Blocks:
         nahi_btn.click(lambda tid, h: confirm("nahi", tid, h),
                        [thread_id, history], conf_out)
 
-        # per-message speaker icon → on-demand TTS into audio_out
+        # New Chat → fresh context; the old transcript moves into chats_bar (reopenable)
+        new_chat_btn.click(new_chat, [chats, history, thread_id],
+                           [chats, history, thread_id, chat, chats_bar, confirm_row, audio_out])
+        # a past-chat chip (JS bridge) → restore that conversation + its thread_id
+        openchat_btn.click(open_chat, [openchat_id, chats, history, thread_id],
+                           [chats, history, thread_id, chat, chats_bar, confirm_row])
+
+        # per-message speaker icon → on-demand STREAMING TTS into audio_out
         # (JS sets speak_idx's value+nonce, fires input+change to commit it, then
         # clicks this hidden button which reads the committed value)
         speak_btn.click(speak, [speak_idx, history], audio_out)

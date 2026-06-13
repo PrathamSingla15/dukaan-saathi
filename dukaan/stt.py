@@ -141,6 +141,56 @@ def to_whisper_input(sr: int, y: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(y, dtype=np.float32)
 
 
+def decode_audio_file(path: str) -> "tuple[int, np.ndarray] | None":
+    """Decode an audio file to ``(sample_rate, float32 mono ndarray)``.
+
+    The browser microphone records **webm/opus** (Chrome) or **ogg/opus** (Firefox),
+    which ``soundfile`` (libsndfile) cannot read — so a mic recording silently
+    decodes to nothing. We try ``soundfile`` first (fast for wav/flac/ogg-vorbis),
+    then fall back to **PyAV** (bundled ffmpeg, ships with faster-whisper) which
+    handles webm/opus/m4a/aac. Returns ``None`` if every decoder fails.
+    """
+    if not path:
+        return None
+    # 1) soundfile — fast path for wav / flac / ogg-vorbis
+    try:
+        import soundfile as sf
+
+        data, sr = sf.read(path, dtype="float32")
+        if getattr(data, "size", 0):
+            return int(sr), np.asarray(data, dtype=np.float32)
+    except Exception:  # noqa: BLE001 — fall through to PyAV
+        pass
+    # 2) PyAV — decode (and resample to 16 kHz mono s16) anything ffmpeg can read
+    try:
+        import av
+        from av.audio.resampler import AudioResampler
+
+        chunks: list[np.ndarray] = []
+        with av.open(path) as container:
+            stream = next((s for s in container.streams if s.type == "audio"), None)
+            if stream is None:
+                return None
+            resampler = AudioResampler(format="s16", layout="mono", rate=_TARGET_SR)
+
+            def _emit(frame):
+                out = resampler.resample(frame)
+                if out is None:
+                    return
+                for rf in (out if isinstance(out, list) else [out]):
+                    chunks.append(np.asarray(rf.to_ndarray()).reshape(-1))
+
+            for frame in container.decode(stream):
+                _emit(frame)
+            _emit(None)  # flush the resampler
+        if not chunks:
+            return None
+        y = np.concatenate(chunks).astype(np.float32) / 32768.0   # int16 -> [-1, 1]
+        return _TARGET_SR, y
+    except Exception:  # noqa: BLE001 — no usable decoder
+        return None
+
+
 def _remote_transcribe(audio, language: str | None = None) -> TranscribeResult:
     """Transcribe via a remote STT endpoint (``config.STT_BASE_URL``) instead of a
     local model — used when the app runs CPU-only and offloads to a GPU service

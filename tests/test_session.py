@@ -53,7 +53,7 @@ def test_text_turn(seeded_db, monkeypatch):
     monkeypatch.setattr(
         dukaan.agent,
         "run_agent",
-        lambda t, thread_id="default": {
+        lambda t, thread_id="default", **kw: {
             "reply": "आज की बिक्री ₹500 रही।",
             "messages": [],
             "tool_calls": ["get_dashboard"],

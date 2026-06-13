@@ -261,6 +261,55 @@ def synthesize(text: str) -> tuple[int, np.ndarray]:
         return _SILENCE
 
 
+def synthesize_stream(text: str):
+    """Yield ``(sr, ndarray)`` per sentence so playback starts on the FIRST sentence.
+
+    Same voice as :func:`synthesize`, but a generator: the UI speaker plays each
+    chunk as it arrives instead of waiting for the whole reply to synthesize, so
+    time-to-first-audio drops from the full reply (~6-18s) to ~one short sentence.
+    Remote mode POSTs one sentence per ``/tts`` call; local mode generates per
+    chunk. Empty/failed chunks are skipped; if nothing was produced it yields one
+    short silence so the caller always gets audio. Never raises.
+    """
+    if text is None or not str(text).strip():
+        yield _SILENCE
+        return
+
+    produced = False
+    try:
+        if config.TTS_BASE_URL:
+            # Remote: split into sentences and synthesize each on its own call (the
+            # endpoint cleans the text). Short text per call -> fast first audio.
+            for chunk in _veena_chunks(text):
+                if not chunk.strip():
+                    continue
+                sr, wav = _remote_synthesize(chunk)
+                if wav is not None and np.asarray(wav).size > 1:
+                    produced = True
+                    yield sr, wav
+        else:
+            cleaned = _clean_for_tts(text.strip())
+            if cleaned:
+                model, tok, snac_model = _load_veena()
+                spk = (config.VEENA_SPEAKER or "agastya").strip().lower()
+                if spk not in _VN_SPEAKERS:
+                    spk = "agastya"
+                for chunk in _veena_chunks(cleaned):
+                    try:
+                        a = _veena_gen_one(chunk, spk, model, tok, snac_model)
+                    except Exception as exc:  # noqa: BLE001 — one bad chunk shouldn't kill the rest
+                        log.warning("Veena stream chunk failed (%s); skipping.", exc)
+                        a = None
+                    if a is not None and a.size > 1:
+                        produced = True
+                        yield _VN_SR, np.atleast_1d(a)
+    except Exception as exc:  # noqa: BLE001 — never break the UI on the voice path
+        log.warning("Veena stream failed (%s); returning silence.", exc)
+
+    if not produced:
+        yield _SILENCE
+
+
 def warmup() -> None:
     """Pre-load Veena so the first real call isn't slow. Never raises.
 

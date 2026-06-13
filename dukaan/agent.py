@@ -60,9 +60,12 @@ Har baat ka sahi roop pehchaano aur uske hisaab se kaam karo:
    sujhaav do (jaise daam, expiry, ya promotion).
 
 Jawaab dene ke niyam:
-- SABSE ZAROORI: jawaab HAMESHA Devanagari (हिंदी) lipi me hi likho — roman ya English
-  akshar me Hindi MAT likho. Sahi roop: "आज की कुल बिक्री ₹528 रही, सबसे ज़्यादा पारले-जी
-  बिका।"  Galat roop: "Aaj ki bikri 528 rahi".
+- BHASHA (reply language) — SABSE ZAROORI: har user-message ke shuru me ek control tag
+  aata hai: "[reply:en]" ya "[reply:hi]". Usi tag ke hisaab se jawaab ki bhasha chuno:
+    • [reply:hi]  -> sirf Devanagari (हिंदी) lipi me likho — roman/English akshar me Hindi
+      MAT likho. (jaise: "आज की कुल बिक्री ₹528 रही, सबसे ज़्यादा पारले-जी बिका।")
+    • [reply:en]  -> sirf saaf, saral English me jawaab do.
+  Koi tag na ho to default English. Is tag ko jawaab me KABHI mat dikhao, na hi iska zikr karo.
 - Chhota aur baat-cheet wale andaaz me jawaab do, jaise dukaandar se aamne-saamne baat
   kar rahe ho. Markdown (*, #) ka kam se kam istemaal karo — saadi Hindi vakya likho.
 - Paison ke aankde theek-theek {currency} ke saath batao (jaise {currency}1,250).
@@ -159,7 +162,17 @@ def _collect_tool_calls(messages: list) -> list[str]:
     return names
 
 
-def run_agent(user_text: str, thread_id: str = "default") -> dict:
+def _lang_prefix(reply_lang: str) -> str:
+    """Per-turn reply-language control tag the system prompt obeys.
+
+    The UI toggle (default English) sets ``reply_lang``; we prepend ``[reply:en]``
+    or ``[reply:hi]`` to the user message so the model's reply language follows the
+    toggle on every turn (and switches mid-chat) without rebuilding the agent.
+    """
+    return "[reply:hi] " if str(reply_lang or "").lower().startswith("hi") else "[reply:en] "
+
+
+def run_agent(user_text: str, thread_id: str = "default", reply_lang: str = "en") -> dict:
     """Run one agent turn for ``user_text`` and return a structured result.
 
     Returns ``{"reply", "messages", "tool_calls", "intent", "pending"}`` on
@@ -174,7 +187,7 @@ def run_agent(user_text: str, thread_id: str = "default") -> dict:
     try:
         agent = build_agent()
         result = agent.invoke(
-            {"messages": [{"role": "user", "content": user_text}]},
+            {"messages": [{"role": "user", "content": _lang_prefix(reply_lang) + user_text}]},
             config={
                 "configurable": {"thread_id": thread_id},
                 "recursion_limit": config.AGENT_RECURSION_LIMIT,
@@ -202,7 +215,7 @@ def run_agent(user_text: str, thread_id: str = "default") -> dict:
         }
 
 
-def stream_agent(user_text: str, thread_id: str = "default"):
+def stream_agent(user_text: str, thread_id: str = "default", reply_lang: str = "en"):
     """Stream one agent turn, token by token.
 
     Yields ``("delta", accumulated_reply)`` as the assistant's final answer is
@@ -219,7 +232,7 @@ def stream_agent(user_text: str, thread_id: str = "default"):
         agent = build_agent()
         last_status = ""
         for chunk, _meta in agent.stream(
-            {"messages": [{"role": "user", "content": user_text}]},
+            {"messages": [{"role": "user", "content": _lang_prefix(reply_lang) + user_text}]},
             config=cfg, stream_mode="messages",
         ):
             cls = chunk.__class__.__name__

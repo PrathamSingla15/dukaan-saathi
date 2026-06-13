@@ -25,6 +25,20 @@
 (function () {
   "use strict";
 
+  /* Mirror the chosen language into the hidden Gradio bridge so the backend sets
+     each reply's language. Native setter + input/change so Svelte commits it
+     (same trick as the speaker / remind bridges below). */
+  function dukaanSyncLangState(lang) {
+    var inp = document.querySelector("#dk-lang-state textarea") ||
+              document.querySelector("#dk-lang-state input");
+    if (!inp) return;
+    var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
+    var d = Object.getOwnPropertyDescriptor(proto.prototype, "value");
+    if (d && d.set) d.set.call(inp, lang); else inp.value = lang;
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   window.dukaanSetLang = function (lang) {
     var hi = lang === "hi";
     document.body.classList.toggle("lang-hi", hi);
@@ -33,6 +47,7 @@
     document.querySelectorAll("[data-lang-btn]").forEach(function (b) {
       b.classList.toggle("on", b.getAttribute("data-lang-btn") === (hi ? "hi" : "en"));
     });
+    dukaanSyncLangState(hi ? "hi" : "en");
   };
 
   window.dukaanToggleLang = function () {
@@ -106,6 +121,9 @@
     if (lb) { window.dukaanSetLang(lb.getAttribute("data-lang-btn")); return; }
     var ask = t.closest && t.closest("[data-ask]");
     if (ask) { window.dukaanAsk(ask.getAttribute("data-ask")); return; }
+    /* talk: a past-chat chip reopens that conversation */
+    var dc = t.closest && t.closest("[data-chat]");
+    if (dc) { window.dukaanOpenChat(dc.getAttribute("data-chat")); return; }
     /* khata: the "Send reminder" pill (checked first — it lives inside the row) */
     var rmd = t.closest && t.closest("[data-remind]");
     if (rmd) { window.dukaanRemind(rmd.getAttribute("data-remind")); return; }
@@ -155,6 +173,23 @@
     inp.dispatchEvent(new Event("change", { bubbles: true }));
     inp.dispatchEvent(new Event("blur", { bubbles: true }));
     var btn = document.getElementById("dk-remind-btn");
+    if (btn) setTimeout(function () { (btn.querySelector("button") || btn).click(); }, 300);
+  };
+
+  /* Past-chat chip: write the chat's thread_id into the hidden bridge textbox and
+     click the hidden button → open_chat() restores that conversation. */
+  window.dukaanOpenChat = function (id) {
+    var inp = document.querySelector("#dk-openchat-id textarea") ||
+              document.querySelector("#dk-openchat-id input");
+    if (!inp) return;
+    var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
+    var d = Object.getOwnPropertyDescriptor(proto.prototype, "value");
+    var val = String(id) + "|" + Date.now();   // nonce → value always changes
+    if (d && d.set) d.set.call(inp, val); else inp.value = val;
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+    inp.dispatchEvent(new Event("blur", { bubbles: true }));
+    var btn = document.getElementById("dk-openchat-btn");
     if (btn) setTimeout(function () { (btn.querySelector("button") || btn).click(); }, 300);
   };
 

@@ -243,6 +243,7 @@ def handle_turn(
     thread_id: str,
     tts: bool = True,
     mode: str = "auto",
+    reply_lang: str = "en",
 ) -> TurnResult:
     """Drive one shopkeeper turn (voice and/or image and/or text) end to end.
 
@@ -257,7 +258,7 @@ def handle_turn(
             return prep
         user_text, detected_lang = prep
 
-        res = agent.run_agent(user_text, thread_id=thread_id)
+        res = agent.run_agent(user_text, thread_id=thread_id, reply_lang=reply_lang)
         reply = (res.get("reply") or "").strip() or _APOLOGY_HI
         pend = res.get("pending")
         pc = (PendingConfirmation(token=pend["batch_id"], prompt=pend.get("summary_hi", ""))
@@ -290,6 +291,7 @@ def handle_turn_stream(
     thread_id: str,
     tts: bool = False,
     mode: str = "auto",
+    reply_lang: str = "en",
 ):
     """Streaming variant of :func:`handle_turn` — a generator of :class:`TurnResult`.
 
@@ -309,7 +311,7 @@ def handle_turn_stream(
 
         partial = ""
         final: dict = {}
-        for kind, payload in agent.stream_agent(user_text, thread_id=thread_id):
+        for kind, payload in agent.stream_agent(user_text, thread_id=thread_id, reply_lang=reply_lang):
             if kind == "delta":
                 partial = payload
                 yield TurnResult(
@@ -431,3 +433,30 @@ def speak(text: str) -> tuple | None:
     the owner taps to hear one. Never raises — returns ``None`` on empty/failure.
     """
     return _tts_or_none(text, True)
+
+
+def speak_stream(text: str):
+    """Stream TTS for ``text`` as ``(sr, ndarray)`` chunks, sentence by sentence.
+
+    Same job as :func:`speak` but a generator: the speaker button plays the FIRST
+    sentence within ~1-2s instead of waiting for the whole reply to synthesize.
+    Yields nothing on empty input; never raises (a broken voice path just ends the
+    stream).
+    """
+    if not (text and str(text).strip()):
+        return
+    try:
+        for chunk in tts.synthesize_stream(text):
+            if chunk is not None:
+                yield chunk
+    except Exception:  # noqa: BLE001 — never break the UI on the voice path
+        return
+
+
+def decode_audio(path):
+    """Decode a recorded audio file (incl. browser webm/opus) to ``(sr, ndarray)``.
+
+    Thin seam over :func:`stt.decode_audio_file` so the front-end never imports
+    ``stt`` directly. Returns ``None`` when no decoder can read the file.
+    """
+    return stt.decode_audio_file(path)
