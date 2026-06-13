@@ -146,6 +146,20 @@ body.lang-hi .block-en { display: none; }
   background: var(--ink); color: var(--paper); box-shadow: var(--sh-1);
 }
 
+/* masthead controls: the voice mute toggle sits beside the language flip-switch */
+.dk-mast__ctrls { display: inline-flex; align-items: center; gap: 10px; }
+.dk-mute {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 30px; border: 1.5px solid var(--ink); border-radius: 999px;
+  background: rgba(255,255,255,.35); color: var(--ink); font-size: 16px;
+  cursor: pointer; box-shadow: var(--sh-1); transition: all .18s ease; user-select: none;
+}
+.dk-mute:hover { background: var(--ink); color: var(--paper); }
+.dk-mute__off { display: none; }
+body.voice-muted .dk-mute__on { display: none; }
+body.voice-muted .dk-mute__off { display: inline-flex; }
+body.voice-muted .dk-mute { color: var(--red-deep); border-color: var(--red-deep); }
+
 /* ---------- nav (ledger index tabs) --------------------------------------- */
 .dk-nav {
   display: flex; flex-wrap: wrap; gap: 4px; padding: 12px 30px 0 58px;

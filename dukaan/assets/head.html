@@ -50,6 +50,22 @@
     dukaanSyncLangState(hi ? "hi" : "en");
   };
 
+  /* Voice on/off: toggle a body class (icon swap), persist, and mirror "1"/"0" into
+     the hidden #dk-mute-state bridge so respond()/load_briefing() know whether to speak. */
+  window.dukaanSetMute = function (muted) {
+    document.body.classList.toggle("voice-muted", !!muted);
+    try { localStorage.setItem("dukaan_mute", muted ? "1" : "0"); } catch (e) {}
+    var inp = document.querySelector("#dk-mute-state textarea") ||
+              document.querySelector("#dk-mute-state input");
+    if (!inp) return;
+    var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
+    var d = Object.getOwnPropertyDescriptor(proto.prototype, "value");
+    var v = muted ? "1" : "0";
+    if (d && d.set) d.set.call(inp, v); else inp.value = v;
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
   window.dukaanToggleLang = function () {
     window.dukaanSetLang(document.body.classList.contains("lang-hi") ? "en" : "hi");
   };
@@ -64,6 +80,12 @@
     var sh = document.querySelector(".dk-shell");
     if (sh && sh.scrollIntoView) sh.scrollIntoView({ behavior: "smooth", block: "start" });
     if (page === "talk") window.dukaanScrollChat();
+    /* opening a data tab → refresh it from the live DB so it's always current
+       (e.g. after a sale recorded via chat) */
+    if (page === "today" || page === "stock" || page === "khata") {
+      var rb = document.getElementById("dk-refresh-btn");
+      if (rb) setTimeout(function () { (rb.querySelector("button") || rb).click(); }, 60);
+    }
   };
 
   /* Pin the chat to the latest message. */
@@ -119,6 +141,8 @@
     if (pg) { window.dukaanShowPage(pg.getAttribute("data-page")); return; }
     var lb = t.closest && t.closest("[data-lang-btn]");
     if (lb) { window.dukaanSetLang(lb.getAttribute("data-lang-btn")); return; }
+    var mb = t.closest && t.closest("[data-mute-btn]");
+    if (mb) { window.dukaanSetMute(!document.body.classList.contains("voice-muted")); return; }
     var ask = t.closest && t.closest("[data-ask]");
     if (ask) { window.dukaanAsk(ask.getAttribute("data-ask")); return; }
     /* talk: a past-chat chip reopens that conversation */
@@ -197,6 +221,9 @@
     var saved = "en";
     try { saved = localStorage.getItem("dukaan_lang") || "en"; } catch (e) {}
     window.dukaanSetLang(saved);
+    var savedMute = "0";
+    try { savedMute = localStorage.getItem("dukaan_mute") || "0"; } catch (e) {}
+    window.dukaanSetMute(savedMute === "1");
     /* Respect the page the server marked active (e.g. onboarding on first run);
        otherwise default to Today and just sync the tab highlight. */
     var active = document.querySelector(".dk-page--active");

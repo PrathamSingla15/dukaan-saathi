@@ -30,14 +30,21 @@ from __future__ import annotations
 import datetime as _dt
 import html as _html
 import os
+import queue
 import re
+import threading
 import urllib.parse
 import uuid
 from pathlib import Path
 
 import gradio as gr
+import numpy as np
 
 from dukaan import config, db, i18n, onboarding, proactive, receiving, session
+
+# A tiny inaudible silence (10 ms @ 24 kHz). A streaming gr.Audio that never gets a
+# real chunk (muted reply / empty briefing) errors on finalize, so we end with this.
+_SILENCE_CHUNK = (24000, np.zeros(240, dtype=np.float32))
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -213,8 +220,13 @@ def masthead_html(snap: dict | None = None) -> str:
       <div class="dk-mast__date">{ic("calendar-blank")}<span class="dk-mast__dateval">{date_line}</span>{_mast_festival_chip(snap)}</div>
     </div>
   </div>
-  <div class="dk-lang" role="group" aria-label="Language">
-    <span data-lang-btn="en">EN</span><span data-lang-btn="hi">हिं</span>
+  <div class="dk-mast__ctrls">
+    <div class="dk-mute" role="button" tabindex="0" data-mute-btn aria-label="Voice on/off" title="Voice on / off · आवाज़ चालू/बंद">
+      <i class="ph ph-speaker-high dk-mute__on" aria-hidden="true"></i><i class="ph ph-speaker-slash dk-mute__off" aria-hidden="true"></i>
+    </div>
+    <div class="dk-lang" role="group" aria-label="Language">
+      <span data-lang-btn="en">EN</span><span data-lang-btn="hi">हिं</span>
+    </div>
   </div>
 </div>"""
 
@@ -869,12 +881,26 @@ def _parse_composer(mm) -> tuple[str, object, object]:
     return text, image, audio
 
 
-def respond(mm, history, thread_id, reply_lang="en"):
+# A sentence boundary = a terminator (। . ! ? newline) FOLLOWED by whitespace, so a
+# decimal like "₹52.50" is never split mid-number (mirrors tts._veena_chunks).
+_SENT_BOUND = re.compile(r"[।.!?\n]\s")
+
+
+def _complete_prefix_len(text: str) -> int:
+    """Length of the leading run of COMPLETE sentences in ``text`` (rest is pending)."""
+    end = 0
+    for m in _SENT_BOUND.finditer(text or ""):
+        end = m.start() + 1   # include the terminator, drop the trailing space
+    return end
+
+
+def respond(mm, history, thread_id, reply_lang="en", mute="0"):
     """One shopkeeper turn from the chat composer (text / voice / image).
 
-    Replies are SILENT by default (no inline TTS) — each bot bubble carries a
-    speaker button to play it on demand. Returns
-    ``(chat, audio_out, dashboard, confirm_row, composer, history)``.
+    The reply is SPOKEN automatically (unless muted): a background thread
+    synthesizes each sentence as the LLM writes it and the audio streams to
+    ``audio_out`` (streaming=True), so the voice starts within ~1-2s and overlaps
+    the text. Yields ``(chat, audio_out, dashboard, confirm_row, composer, history)``.
     """
     history = list(history or [])
     text, image, audio = _parse_composer(mm)
@@ -893,6 +919,47 @@ def respond(mm, history, thread_id, reply_lang="en"):
     yield (chat_html(history, typing=True, status=_THINKING), gr.update(), gr.update(),
            gr.update(visible=False), _EMPTY_MM, history)
 
+    # --- auto-speak: a worker thread synthesizes completed sentences (fed via
+    # synth_q) into audio_q WHILE the text keeps streaming, so the voice overlaps
+    # the writing. Best-effort — a slow/broken voice path only drops audio. ----
+    speak_on = str(mute) not in ("1", "true", "True", "on")
+    synth_q: queue.Queue = queue.Queue()
+    audio_q: queue.Queue = queue.Queue()
+    _DONE = object()
+
+    def _tts_worker():
+        try:
+            while True:
+                seg = synth_q.get()
+                if seg is None:
+                    break
+                try:
+                    for chunk in session.speak_stream(seg):
+                        audio_q.put(chunk)
+                except Exception:  # noqa: BLE001 — never break the turn on the voice path
+                    pass
+        finally:
+            audio_q.put(_DONE)
+
+    if speak_on:
+        threading.Thread(target=_tts_worker, daemon=True).start()
+
+    audio_emitted = False
+
+    def _next_audio():
+        """A ready ``(sr,ndarray)`` chunk, else ``gr.update()`` (non-blocking)."""
+        nonlocal audio_emitted
+        if not speak_on:
+            return gr.update()
+        try:
+            item = audio_q.get_nowait()
+        except queue.Empty:
+            return gr.update()
+        if item is _DONE:
+            return gr.update()
+        audio_emitted = True
+        return item
+
     # The bot bubble is added only once real answer text arrives — until then we
     # keep the dots + a status label ("Checking the books…") so the empty bubble
     # never flashes.
@@ -901,6 +968,8 @@ def respond(mm, history, thread_id, reply_lang="en"):
     dash_out = gr.update()
     pend_vis = False
     last_len = 0
+    spoken = 0          # reply_text index up to which sentences were queued for TTS
+    final_txt = ""
     for tr in session.handle_turn_stream(audio=audio, text=text or None, image=image,
                                          thread_id=thread_id, tts=False, reply_lang=reply_lang):
         if tr.user_text:
@@ -912,8 +981,16 @@ def respond(mm, history, thread_id, reply_lang="en"):
         if not txt.strip():
             # pre-answer phase: dots + what the agent is doing (tool/DB call)
             yield (chat_html(history, typing=True, status=_STATUS.get(tr.status, _THINKING)),
-                   None, gr.update(), gr.update(visible=False), _EMPTY_MM, history)
+                   _next_audio(), gr.update(), gr.update(visible=False), _EMPTY_MM, history)
             continue
+
+        final_txt = txt
+        # queue any newly-completed sentence(s) for the speaker thread
+        if speak_on:
+            cp = _complete_prefix_len(txt)
+            if cp > spoken:
+                synth_q.put(txt[spoken:cp])
+                spoken = cp
 
         if not bot_added:
             bi = len(history)
@@ -932,8 +1009,29 @@ def respond(mm, history, thread_id, reply_lang="en"):
                 dash_out = dashboard_html(tr.dashboard_snapshot)
             pend_vis = bool(tr.pending_confirmation)
             last_len = len(txt)
-            yield (chat_html(history), None, dash_out,
+            yield (chat_html(history), _next_audio(), dash_out,
                    gr.update(visible=pend_vis), _EMPTY_MM, history)
+
+    # text done → flush the trailing sentence, then drain the remaining audio
+    # (audio-only yields; bounded so a stuck voice path can't hang the turn).
+    if speak_on:
+        if final_txt and len(final_txt) > spoken:
+            synth_q.put(final_txt[spoken:])
+        synth_q.put(None)
+        while True:
+            try:
+                item = audio_q.get(timeout=30)
+            except queue.Empty:
+                break
+            if item is _DONE:
+                break
+            audio_emitted = True
+            yield (gr.update(), item, gr.update(), gr.update(), gr.update(), gr.update())
+
+    # A streaming gr.Audio that never received a chunk (muted, or an empty reply)
+    # errors on finalize — end with a tiny inaudible silence so it closes cleanly.
+    if not audio_emitted:
+        yield (gr.update(), _SILENCE_CHUNK, gr.update(), gr.update(), gr.update(), gr.update())
 
 
 def confirm(answer, thread_id, history):
@@ -1037,11 +1135,35 @@ def refresh_dashboard():
     return dashboard_html(session.dashboard_snapshot_struct())
 
 
-def load_briefing():
+def refresh_views():
+    """Re-render Today + Stock + Khata from the live DB in one snapshot.
+
+    Wired to a hidden button that ``head.html`` clicks whenever the owner opens a
+    data tab, so each tab is always current — even after a change made via chat.
+    """
+    snap = session.dashboard_snapshot_struct()
+    return dashboard_html(snap), stock_html(snap), khata_html(snap)
+
+
+def load_briefing(mute="0"):
+    """Generate the morning briefing, show it, then auto-speak it (unless muted).
+
+    A generator: first yield the text to the briefing panel, then stream the audio
+    sentence-by-sentence to ``audio_out`` so it plays right after it appears.
+    """
+    audio_emitted = False
     try:
-        return briefing_html(session.morning_briefing(tts=False)["text"])
+        text = session.morning_briefing(tts=False)["text"]
+        yield briefing_html(text), gr.update()
     except Exception as e:  # noqa: BLE001 — best-effort
-        return briefing_html(f"{_ERROR_HI}\n{e}")
+        yield briefing_html(f"{_ERROR_HI}\n{e}"), gr.update()
+        text = ""
+    if str(mute) not in ("1", "true", "True", "on") and text and text.strip():
+        for chunk in session.speak_stream(text):
+            audio_emitted = True
+            yield gr.update(), chunk
+    if not audio_emitted:   # streaming audio needs ≥1 chunk to finalize cleanly
+        yield gr.update(), _SILENCE_CHUNK
 
 
 def refresh_khata():
@@ -1172,8 +1294,7 @@ def build_ui() -> gr.Blocks:
             # ---------------------------------------------------------- TODAY
             with gr.Column(elem_id="page-today", elem_classes=["dk-page", "dk-page--active"]):
                 _panel(_secthead(ic("sun"), "Today's account", "आज का हिसाब",
-                                 meta=_page_date_meta(T("demo data", "डेमो डेटा")
-                                                      if db.data_mode() == "demo" else T("live", "लाइव"))))
+                                 meta=_page_date_meta()))
                 briefing = _panel(briefing_placeholder())
                 with gr.Row(elem_classes=["dk-btnrow"]):
                     brief_btn = _btn(ic("speaker-high") + " " + T("Generate morning briefing", "सुबह का हाल बनाएँ"), kind="gold")
@@ -1206,7 +1327,7 @@ def build_ui() -> gr.Blocks:
                     elem_id="dk-composer", elem_classes=["dk-composer"],
                 )
                 _panel(f'<div class="dk-hint">{ic("speaker-high")} '
-                       f'{T("Replies are silent · tap the speaker on any reply to hear it.", "जवाब बिना आवाज़ के आते हैं · सुनने के लिए किसी जवाब पर स्पीकर दबाएँ।")}</div>')
+                       f'{T("Replies play aloud · use the speaker toggle up top to mute.", "जवाब आवाज़ में आते हैं · ऊपर स्पीकर बटन से बंद करें।")}</div>')
                 # streaming=True: speak() yields one sentence at a time, so audio
                 # starts within ~1-2s and plays the chunks back-to-back as they arrive.
                 audio_out = gr.Audio(streaming=True, autoplay=True, show_label=False,
@@ -1227,6 +1348,13 @@ def build_ui() -> gr.Blocks:
                 openchat_id = gr.Textbox(show_label=False, container=False,
                                          elem_id="dk-openchat-id", elem_classes=["dk-hidden"])
                 openchat_btn = gr.Button("open", elem_id="dk-openchat-btn", elem_classes=["dk-hidden"])
+                # hidden bridge: the masthead speaker toggle writes "1"/"0" here so the
+                # backend knows whether to auto-speak replies (default "0" = voice on).
+                mute_state = gr.Textbox(value="0", show_label=False, container=False,
+                                        elem_id="dk-mute-state", elem_classes=["dk-hidden"])
+                # hidden bridge: opening a data tab (head.html) clicks this → refresh_views()
+                # re-renders Today/Stock/Khata so they're always current after a chat change.
+                refresh_btn_hidden = gr.Button("refresh", elem_id="dk-refresh-btn", elem_classes=["dk-hidden"])
 
             # ---------------------------------------------------------- KHATA
             with gr.Column(elem_id="page-khata", elem_classes=["dk-page"]):
@@ -1312,7 +1440,7 @@ def build_ui() -> gr.Blocks:
         # ===================================================== wiring
         # Talk
         turn_out = [chat, audio_out, dash, confirm_row, composer, history]
-        composer.submit(respond, [composer, history, thread_id, lang_state], turn_out)
+        composer.submit(respond, [composer, history, thread_id, lang_state, mute_state], turn_out)
 
         conf_out = [chat, audio_out, dash, confirm_row, history]
         haan_btn.click(lambda tid, h: confirm("haan", tid, h),
@@ -1334,7 +1462,9 @@ def build_ui() -> gr.Blocks:
 
         # Today
         refresh_btn.click(refresh_dashboard, None, dash)
-        brief_btn.click(load_briefing, None, briefing)
+        brief_btn.click(load_briefing, [mute_state], [briefing, audio_out])
+        # opening a data tab (head.html clicks this hidden button) re-renders all three
+        refresh_btn_hidden.click(refresh_views, None, [dash, stock, khata])
 
         # Khata — per-customer reminder; re-renders the ledger with the draft inline
         remind_btn.click(remind_one, [remind_name], khata)
