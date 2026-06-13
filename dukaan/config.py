@@ -103,6 +103,10 @@ VEENA_4BIT = _flag("DUKAAN_VEENA_4BIT", False)  # 4-bit (needs bitsandbytes); el
 # Unset (default) = run the model locally, so the same code works on the GPU host too.
 STT_BASE_URL = _env("DUKAAN_STT_BASE_URL", "")
 TTS_BASE_URL = _env("DUKAAN_TTS_BASE_URL", "")
+# Surya OCR 2 (datalab-to/surya-ocr-2) pre-pass: when set, bill/khata images are run
+# through this OCR endpoint FIRST and the recognized text is added to the vision
+# prompt as grounding. Unset (default) = skip Surya, Gemma vision reads the image alone.
+SURYA_BASE_URL = _env("DUKAAN_SURYA_BASE_URL", "")
 
 # ------------------------------------------------------------------------ Gradio
 GRADIO_HOST = _env("DUKAAN_GRADIO_HOST", "0.0.0.0")

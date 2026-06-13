@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from dukaan import i18n, llm
+from dukaan import i18n, llm, surya
 
 # ------------------------------------------------------------------ constants
 
@@ -269,6 +269,25 @@ def _challan_line(d: dict) -> dict | None:
     return line
 
 
+def _with_surya(prompt: str, image: Any) -> str:
+    """Append Surya OCR's recognized text to a vision prompt as grounding context.
+
+    Runs the image through the Surya OCR pre-pass (:func:`dukaan.surya.ocr_text`) and,
+    when it returns text, folds it in so Gemma reads names / numbers accurately. No-op
+    (returns ``prompt`` unchanged) when Surya is unconfigured or unreachable.
+    """
+    txt = surya.ocr_text(image)
+    if not txt:
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "Reference OCR text from a dedicated OCR engine (Surya) for THIS image — use it "
+        "to read item names, amounts and numbers accurately. If it conflicts with what "
+        "you see in the image, trust the image.\n"
+        f'"""\n{txt[:4000]}\n"""'
+    )
+
+
 def parse_challan(image: Any, supplier_hint: str | None = None) -> dict:
     """Extract structured line items from a supplier bill / challan photo.
 
@@ -286,6 +305,7 @@ def parse_challan(image: Any, supplier_hint: str | None = None) -> dict:
     prompt = _CHALLAN_PROMPT
     if supplier_hint and supplier_hint.strip():
         prompt = f"{prompt}\n\nExpected supplier name hint: {supplier_hint.strip()}"
+    prompt = _with_surya(prompt, image)   # Surya OCR pre-pass grounds the extraction
 
     try:
         raw = llm.vision_extract(image, prompt, max_tokens=2048,
@@ -340,8 +360,9 @@ def parse_khata(image: Any) -> dict:
             "error": str | None  # "reupload" when ok=False
         }
     """
+    prompt = _with_surya(_KHATA_PROMPT, image)   # Surya OCR pre-pass grounds the extraction
     try:
-        raw = llm.vision_extract(image, _KHATA_PROMPT, max_tokens=2048,
+        raw = llm.vision_extract(image, prompt, max_tokens=2048,
                                  response_format={"type": "json_object"}).strip()
     except Exception:
         return {"ok": False, "customers": [], "raw": "", "error": "reupload"}
