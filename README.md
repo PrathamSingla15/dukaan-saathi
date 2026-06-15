@@ -6,7 +6,14 @@ colorTo: red
 sdk: docker
 app_port: 7860
 pinned: false
-short_description: Hindi voice + photo assistant that keeps a kirana shop's stock and udhaar
+short_description: Hindi voice + photo inventory & udhaar ledger for kiranas
+tags:
+  - track:backyard
+  - sponsor:modal
+  - achievement:offbrand
+  - achievement:llama
+  - achievement:sharing
+  - achievement:fieldnotes
 ---
 
 # Dukaan Saathi
@@ -17,8 +24,8 @@ Built for the **Build Small Hackathon**, Backyard AI track. Everything runs on o
 
 - Live Space: https://huggingface.co/spaces/build-small-hackathon/dukaan-saathi
 - Blog (Field Notes): https://build-small-hackathon-dukaan-saathi.hf.space/blog
-- Demo video: _add link_
-- Social post: _add link_
+- Demo video: https://www.loom.com/share/7a675a1918bf4233bd44c8e049f84c97
+- Social post: https://x.com/ps_1506/status/2066625864482349310
 - Code: https://github.com/PrathamSingla15/dukaan-saathi
 
 ## Architecture
@@ -90,7 +97,7 @@ A config-only swap to **MiniCPM-V 4.6** (≤4B) runs the same app on a smaller v
 
 ## Team
 
-- Pratham Singla ([@yobro4619](hhttps://huggingface.co/yobro4619))
+- Pratham Singla ([@yobro4619](https://huggingface.co/yobro4619))
 - Adesh Gupta ([@aadex](https://huggingface.co/aadex))
 - Shivank Garg ([@shivank21](https://huggingface.co/shivank21))
 
