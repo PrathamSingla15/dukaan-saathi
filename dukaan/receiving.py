@@ -38,16 +38,25 @@ def _stage_line(line: dict) -> dict:
     """
     input_name = str(line.get("name", "")).strip()
 
-    res = ops.resolve_item(input_name)
-    matched = res.get("status") == "matched"
-    item = res.get("item") if matched else None
+    # Receiving uses STRICT exact-name matching (not the fuzzy resolver): a printed
+    # bill line should restock an existing SKU only on an exact name match, never
+    # fuzzy-merge into a different product. Unmatched lines become new items.
+    item = ops.find_item_exact(input_name)
+    matched = item is not None
 
     action = "merge" if matched else "new"
     item_id = item["item_id"] if matched else None
     category = item.get("category") if matched else None
     resolved_name = item["name"] if matched else input_name
 
-    est_exp, is_est = ops.estimate_expiry(input_name, category)
+    # If the caller already carries an expiry (e.g. the owner edited it in the
+    # Receive table before committing), keep it verbatim instead of re-estimating;
+    # otherwise estimate from the resolved item's category / shelf life.
+    exp_in = line.get("expiry") or line.get("estimated_expiry")
+    if exp_in not in (None, ""):
+        est_exp, is_est = str(exp_in).strip(), False
+    else:
+        est_exp, is_est = ops.estimate_expiry(input_name, category)
 
     qty_raw = line.get("qty", 1)
     try:
@@ -79,7 +88,7 @@ def _stage_line(line: dict) -> dict:
         "hsn": line.get("hsn"),
         "estimated_expiry": est_exp,
         "is_estimated": is_est,
-        "candidates": [c["name"] for c in res.get("candidates", [])],
+        "candidates": [],
     }
 
 
@@ -174,6 +183,7 @@ def commit_receive(staged_items: list[dict], supplier: str | None = None) -> dic
             supplier=supplier or line.get("supplier"),
             expiry_date=line.get("estimated_expiry"),
             resolved_item_id=line.get("item_id") if line.get("action") == "merge" else None,
+            exact_only=True,   # bill lines merge only on an exact name, never fuzzy
         )
 
         if result.get("ok"):

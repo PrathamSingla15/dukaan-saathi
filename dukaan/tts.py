@@ -156,6 +156,11 @@ def _veena_chunks(text: str, max_chars: int = 160) -> list[str]:
 
 def _veena_gen_one(text: str, spk: str, model, tok, snac_model):
     """Generate one (sentence-sized) chunk → waveform ndarray, or None."""
+    # Reset the RNG to a fixed state before each chunk so the sampled voice onset is
+    # identical every time — pins one consistent timbre across all chunks/calls/the app.
+    torch.manual_seed(config.VEENA_SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(config.VEENA_SEED)
     prompt_ids = tok.encode(f"<spk_{spk}> {text}", add_special_tokens=False)
     seq = [_VN_SOH, *prompt_ids, _VN_EOH, _VN_SOA, _VN_SOS]
     input_ids = torch.tensor([seq], device=model.device)
@@ -222,17 +227,19 @@ def _clean_for_tts(text: str) -> str:
 
 
 # ------------------------------------------------------------------- public API
-def _remote_synthesize(text: str) -> tuple[int, np.ndarray]:
+def _remote_synthesize(text: str, speaker: str | None = None) -> tuple[int, np.ndarray]:
     """Synthesize via a remote TTS endpoint (``config.TTS_BASE_URL``) instead of a
     local model — used when the app runs CPU-only and offloads to a GPU service
-    (e.g. Modal). Sends raw text (the endpoint cleans it). Silence on any failure."""
+    (e.g. Modal). Sends raw text (the endpoint cleans it) plus the pinned app speaker
+    so the voice is identical whatever the server default is. Silence on any failure."""
     if text is None or not text.strip():
         return _SILENCE
+    spk = (speaker or config.VEENA_SPEAKER or "agastya").strip().lower()
     try:
         import io
         import httpx
         import soundfile as sf
-        r = httpx.post(config.TTS_BASE_URL, json={"text": text}, timeout=120)
+        r = httpx.post(config.TTS_BASE_URL, json={"text": text, "speaker": spk}, timeout=120)
         r.raise_for_status()
         wav, sr = sf.read(io.BytesIO(r.content), dtype="float32")
         return int(sr), np.atleast_1d(np.asarray(wav, dtype=np.float32))
@@ -241,21 +248,22 @@ def _remote_synthesize(text: str) -> tuple[int, np.ndarray]:
         return _SILENCE
 
 
-def synthesize(text: str) -> tuple[int, np.ndarray]:
+def synthesize(text: str, speaker: str | None = None) -> tuple[int, np.ndarray]:
     """Speak ``text`` with Veena → ``(sampling_rate, waveform float32)``.
 
-    Veena speaks Hindi / English / Hinglish. Empty text yields a short silence, and
-    *any* failure yields ``(16000, zeros)`` so the UI never crashes on playback.
+    One pinned app voice (``config.VEENA_SPEAKER``); Veena speaks Hindi / English /
+    Hinglish. Empty text yields a short silence, and *any* failure yields
+    ``(16000, zeros)`` so the UI never crashes on playback.
     """
     if config.TTS_BASE_URL:
-        return _remote_synthesize(text)
+        return _remote_synthesize(text, speaker)
     if text is None or not text.strip():
         return _SILENCE
     text = _clean_for_tts(text.strip())
     if not text:
         return _SILENCE
     try:
-        return _synth_veena(text)
+        return _synth_veena(text, speaker)
     except Exception as exc:  # noqa: BLE001 — never break the UI on the voice path
         log.warning("Veena TTS failed (%s); returning silence.", exc)
         return _SILENCE

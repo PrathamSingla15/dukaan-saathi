@@ -28,8 +28,14 @@ echo "[entrypoint] DATA_DIR=$DUKAAN_DATA_DIR"
 TORCH_LIB="$(uv run python -c 'import os,torch;print(os.path.join(os.path.dirname(torch.__file__),"lib"))' 2>/dev/null || true)"
 export LD_LIBRARY_PATH="${TORCH_LIB}:${LD_LIBRARY_PATH:-}"
 
-# --- seed the demo catalog/ledger only on first boot (idempotent thereafter).
-if [ ! -f "${DUKAAN_DATA_DIR}/inventory.db" ]; then
+# --- install the curated demo DB shipped in the image (data/). Overwrites on every
+#     boot so the Space always starts from the exact submission state; falls back to
+#     seeding only if no DB was shipped. (Skips the copy when DATA_DIR is already ./data.)
+if [ -f "data/inventory.db" ] && [ -f "data/transactions.db" ] \
+   && [ "$(realpath data)" != "$(realpath "${DUKAAN_DATA_DIR}")" ]; then
+  echo "[entrypoint] installing shipped demo DB into ${DUKAAN_DATA_DIR}"
+  cp -f data/inventory.db data/transactions.db "${DUKAAN_DATA_DIR}/"
+elif [ ! -f "${DUKAAN_DATA_DIR}/inventory.db" ]; then
   echo "[entrypoint] seeding demo DB"; uv run python -m dukaan.db --reset || true
 fi
 

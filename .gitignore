@@ -22,3 +22,11 @@ venv/
 
 # OS cruft
 .DS_Store
+
+# Internal docs, planning, and dev tooling (kept on disk, out of the public submission)
+/docs/
+/tasks/
+/scripts/dev/
+# Demo-data generators (the shipped DB is the runtime data; catalog.py holds the product master)
+/dukaan/seed_inventory.py
+/dukaan/seed_ledger.py

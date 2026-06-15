@@ -53,6 +53,21 @@ def find_item(name: str) -> dict | None:
     return None
 
 
+def find_item_exact(name: str) -> dict | None:
+    """STRICT case-insensitive exact-name match — no substring / token fallback.
+
+    Used by the receiving (challan) flow so a precise bill line never merges into a
+    different product. ``find_item`` and ``resolve_item`` are deliberately fuzzy
+    (great for chat: "Parle G" -> "Parle-G Biscuit 70g"), but on a printed bill that
+    leniency mis-merges distinct items (e.g. "Deluxe Gold Olive Oil 1L" -> "Saffola
+    Gold Oil 1L" via the shared "Gold/Oil/1L" tokens). For receiving we only merge an
+    EXACT name; otherwise the bill line is created as a new item."""
+    if not name or not name.strip():
+        return None
+    rows = db.qx("SELECT * FROM inv.inventory WHERE lower(name)=lower(?)", (name.strip(),))
+    return rows[0] if rows else None
+
+
 def find_customer(name: str) -> dict | None:
     if not name:
         return None
@@ -343,16 +358,23 @@ def record_sale(item_name: str, qty: int, sale_price: float | None = None,
 def record_purchase(item_name: str, qty: int, cost: float | None = None, supplier: str | None = None,
                     purchase_price: float | None = None, mrp: float | None = None,
                     category: str | None = None, expiry_date: str | None = None, *,
-                    resolved_item_id: int | None = None) -> dict:
+                    resolved_item_id: int | None = None, exact_only: bool = False) -> dict:
     """Record a supplier purchase/restock: add a FEFO lot, log the purchase, and
     recompute inventory.qty (create the item if new). Expiry is estimated from
     shelf-life when the challan omits it (flagged is_estimated). Backwards-compatible
     return keys: ok/item/qty_added/new_qty/cost/supplier/message (+ lot_id/expiry_date/
-    is_estimated)."""
+    is_estimated).
+
+    ``exact_only`` (used by the receiving/challan flow): when no ``resolved_item_id``
+    is given, match an existing item ONLY by strict exact name (:func:`find_item_exact`)
+    instead of fuzzy resolve — so a precise bill line is never merged into a different
+    product. Default False keeps the lenient behaviour for chat/tools."""
     qty = int(qty)
     if resolved_item_id is not None:
         rows = db.qx("SELECT * FROM inv.inventory WHERE item_id=?", (resolved_item_id,))
         item = rows[0] if rows else None
+    elif exact_only:
+        item = find_item_exact(item_name)
     else:
         r = resolve_item(item_name)
         item = r["item"] if r["status"] == "matched" else find_item(item_name)

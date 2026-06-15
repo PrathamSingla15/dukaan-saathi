@@ -30,7 +30,6 @@ from __future__ import annotations
 import datetime as _dt
 import html as _html
 import os
-import queue
 import re
 import threading
 import urllib.parse
@@ -39,12 +38,13 @@ from pathlib import Path
 
 import gradio as gr
 import numpy as np
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-from dukaan import config, db, i18n, onboarding, proactive, receiving, session
-
-# A tiny inaudible silence (10 ms @ 24 kHz). A streaming gr.Audio that never gets a
-# real chunk (muted reply / empty briefing) errors on finalize, so we end with this.
-_SILENCE_CHUNK = (24000, np.zeros(240, dtype=np.float32))
+from dukaan import (audio_cache, config, db, i18n, onboarding, proactive,
+                    receiving, session)
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -162,19 +162,6 @@ def _overdue_badge(overdue) -> str:
     return (' <span class="dk-badge--red">' + T("overdue", "बकाया") + "</span>") if overdue else ""
 
 
-def _from_sub(it: dict) -> str:
-    inp, res = it.get("input_name"), it.get("resolved_name")
-    if inp and inp != res:
-        return '<div class="cat">' + T("from", "से") + ": " + _esc(inp) + "</div>"
-    return ""
-
-
-def _action_badge(action) -> str:
-    if action == "merge":
-        return '<span class="dk-badge--ok">' + T("restock", "रीस्टॉक") + "</span>"
-    return '<span class="dk-badge--brass">' + T("new", "नया") + "</span>"
-
-
 def _days_chip(d) -> str:
     if d is None:
         return '<span class="dk-badge--muted">—</span>'
@@ -221,12 +208,15 @@ def masthead_html(snap: dict | None = None) -> str:
     </div>
   </div>
   <div class="dk-mast__ctrls">
-    <div class="dk-mute" role="button" tabindex="0" data-mute-btn aria-label="Voice on/off" title="Voice on / off · आवाज़ चालू/बंद">
+    <div class="dk-mute" role="button" tabindex="0" data-mute-btn aria-label="Auto-prepare reply audio" title="Auto-prepare reply audio · आवाज़ अपने-आप तैयार करें">
       <i class="ph ph-speaker-high dk-mute__on" aria-hidden="true"></i><i class="ph ph-speaker-slash dk-mute__off" aria-hidden="true"></i>
     </div>
     <div class="dk-lang" role="group" aria-label="Language">
       <span data-lang-btn="en">EN</span><span data-lang-btn="hi">हिं</span>
     </div>
+    <a class="dk-blog-link" href="/blog" target="_blank" rel="noopener" title="Read the build write-up · ब्लॉग पढ़ें">
+      {ic("book-open")}<span class="i18n-en">Blog</span><span class="i18n-hi">ब्लॉग</span>
+    </a>
   </div>
 </div>"""
 
@@ -266,7 +256,7 @@ def _offline_banner(snap: dict) -> str:
     if snap.get("server_up"):
         return ""
     return (f'<div class="dk-banner">{ic("warning")} '
-            f'{T("Gemma (voice assistant) is offline — the dashboard below still works from your books. Start <code>scripts/serve_llm.sh</code> to chat.", "Gemma (आवाज़ सहायक) अभी बंद है — नीचे का हिसाब आपकी बही से चलता रहेगा। बात करने के लिए <code>scripts/serve_llm.sh</code> चलाएँ।")}</div>')
+            f'{T("Gemma (voice assistant) is offline. The dashboard below still works from your books.", "Gemma (आवाज़ सहायक) अभी बंद है। नीचे का हिसाब आपकी बही से चलता रहेगा।")}</div>')
 
 
 def dashboard_html(snap: dict | None) -> str:
@@ -338,8 +328,10 @@ def dashboard_html(snap: dict | None) -> str:
 </div>""")
 
     # --- expiring soon
+    # Read-only info rows (no data-ask) — the owner just reads these; the CSS
+    # pointer/hover lives on [data-ask], so dropping it makes the row static.
     exp_rows = "".join(
-        f'<div class="dk-list__row" data-ask="{_esc(e.get("name"))} kitne din me expire ho raha hai?">'
+        f'<div class="dk-list__row">'
         f'<span class="nm">{_esc(e.get("name"))}{_est_badge(e.get("is_estimated"))}</span>'
         f'<span class="sub">· {e.get("qty", 0)} {T("pcs", "नग")}</span>'
         f'<span class="amt">{_days_chip(e.get("days_left"))}</span></div>'
@@ -354,8 +346,8 @@ def dashboard_html(snap: dict | None) -> str:
 </div>""")
 
     # --- low stock
-    low_rows = "".join(
-        f'<div class="dk-list__row" data-ask="{_esc(l.get("name"))} ka stock kitna hai?">'
+    low_rows = "".join(   # read-only info rows (no data-ask)
+        f'<div class="dk-list__row">'
         f'<span class="nm">{_esc(l.get("name"))}</span>'
         f'<span class="sub">· {_esc(l.get("category"))}</span>'
         f'<span class="amt red">{l.get("qty", 0)} / {l.get("reorder_level", 0)}</span></div>'
@@ -535,8 +527,9 @@ def chat_html(history: list[dict], *, typing: bool = False, status: str = "") ->
                 bc = f'<span class="{cls}">{lab}</span>'
             err = " err" if m.get("err") else ""
             # per-message speaker: replies are silent by default; tap to hear one
-            speak = (f'<span class="dk-speak" data-speak-idx="{i}" role="button" '
-                     f'title="Listen / सुनें" aria-label="Listen">{ic("speaker-high")}</span>')
+            speak = (f'<span class="dk-speak" data-mid="{m.get("mid","")}" data-state="idle" '
+                     f'role="button" title="Listen / सुनें" aria-label="Listen">'
+                     f'{ic("speaker-high")}</span>')
             rows.append(
                 f'<div class="dk-msg dk-msg--bot"><div class="dk-msg__meta">'
                 f'{ic("storefront")} {T("Saathi", "साथी")} {bc}'
@@ -648,8 +641,10 @@ def stock_html(snap: dict | None) -> str:
   </div>
 </div>"""
 
+    # Expiring + Low-stock are read-only info tables (no data-ask). Slow-movers
+    # below stays tappable (the owner asks Saathi why an item isn't selling).
     exp_rows = "".join(
-        f'<tr data-ask="{_esc(e.get("name"))} ka stock kitna hai?"><td class="nm">{_esc(e.get("name"))}</td>'
+        f'<tr><td class="nm">{_esc(e.get("name"))}</td>'
         f'<td class="cat">{_esc(e.get("category"))}</td>'
         f'<td class="num">{e.get("qty", 0)}</td>'
         f'<td class="num">{_esc(e.get("expiry_date"))}{_est_badge(e.get("is_estimated"), "~")}</td>'
@@ -661,7 +656,7 @@ def stock_html(snap: dict | None) -> str:
         exp_rows, "Nothing expiring soon", "कुछ जल्दी एक्सपायर नहीं")
 
     low_rows = "".join(
-        f'<tr data-ask="{_esc(l.get("name"))} kitna mangwana chahiye?"><td class="nm">{_esc(l.get("name"))}</td>'
+        f'<tr><td class="nm">{_esc(l.get("name"))}</td>'
         f'<td class="cat">{_esc(l.get("category"))}</td>'
         f'<td class="num" style="color:var(--red);font-weight:600">{l.get("qty", 0)}</td>'
         f'<td class="num">{l.get("reorder_level", 0)}</td></tr>'
@@ -688,7 +683,8 @@ def stock_html(snap: dict | None) -> str:
             f'<div class="dk-card col-5"><div class="dk-card__head"><span class="dk-card__icon">{ic("trend-down")}</span>'
             f'<span class="dk-card__title">{T("Low stock", "कम स्टॉक")}</span></div>{low_tbl}</div>'
             f'<div class="dk-card col-12"><div class="dk-card__head"><span class="dk-card__icon">{ic("chart-line-down")}</span>'
-            f'<span class="dk-card__title">{T("Slow movers", "धीमे बिकने वाले")}</span></div>{slow_tbl}</div>'
+            f'<span class="dk-card__title">{T("Slow movers", "धीमे बिकने वाले")}</span></div>{slow_tbl}'
+            f'<div class="dk-hint">{T("Tap a row to ask Saathi why it is not selling.", "क्यों नहीं बिक रहा, यह पूछने के लिए किसी पंक्ति पर टैप करें।")}</div></div>'
             f'</div>')
 
 
@@ -706,32 +702,36 @@ def _receive_hint() -> str:
             f'{T("Upload the bill photo above, then tap “Read the bill”.", "ऊपर बिल की फ़ोटो डालें, फिर “बिल पढ़ें” दबाएँ।")}</div>')
 
 
-def receive_preview_html(preview: dict | None) -> str:
+def receive_error_html(msg=None) -> str:
+    """Photo-unclear / parse-failure banner for the Receive status panel."""
+    msg = msg or T("Photo unclear, please re-upload.", "फ़ोटो साफ़ नहीं, दोबारा भेजें।")
+    return (f'<div class="dk-card dk-card--plain"><div class="dk-banner">'
+            f'{ic("camera")} {_text(msg)}</div></div>')
+
+
+def receive_summary_html(preview: dict | None) -> str:
+    """Header card above the editable Receive table: supplier, counts, total, the
+    restock/new mix, and the next-step cue. The line items live in the editable
+    ``gr.Dataframe`` below, so this carries no table itself."""
     preview = preview or {}
-    if not preview.get("ok"):
-        msg = preview.get("message") or T("Photo unclear — please re-upload.", "फ़ोटो साफ़ नहीं — दोबारा भेजें।")
-        return (f'<div class="dk-card dk-card--plain"><div class="dk-banner">'
-                f'{ic("camera")} {_text(msg)}</div></div>')
     items = preview.get("items") or []
-    rows = "".join(
-        f'<tr><td class="nm">{_esc(it.get("resolved_name"))}'
-        f'{_from_sub(it)}</td>'
-        f'<td class="num">{it.get("qty", 0)}</td>'
-        f'<td class="num">{_money(it.get("rate")) if it.get("rate") is not None else "—"}</td>'
-        f'<td class="num">{_money(it.get("mrp")) if it.get("mrp") is not None else "—"}</td>'
-        f'<td class="num">{_esc(it.get("estimated_expiry") or "—")}{_est_badge(it.get("is_estimated"), "~")}</td>'
-        f'<td>{_action_badge(it.get("action"))}</td></tr>'
-        for it in items
-    )
-    tbl = _table(
-        [T("Item", "चीज़"), T("Qty", "मात्रा"), T("Rate", "भाव"), T("MRP", "MRP"), T("Expiry", "एक्सपायरी"), T("Action", "क्रिया")],
-        rows, "No line items found", "कोई चीज़ नहीं मिली")
+    n_restock = sum(1 for it in items if it.get("action") == "merge")
+    n_new = len(items) - n_restock
     sup = preview.get("supplier")
-    return (f'<div class="dk-card"><div class="dk-card__head"><span class="dk-card__icon">{ic("clipboard-text")}</span>'
+    sup_chip = (ic("storefront") + " " + _esc(sup) + " · ") if sup else ""
+    mix_parts = []
+    if n_restock:
+        mix_parts.append(f'{n_restock} {T("restock", "रीस्टॉक")}')
+    if n_new:
+        mix_parts.append(f'{n_new} {T("new", "नया")}')
+    mix = (" · " + " · ".join(mix_parts)) if mix_parts else ""
+    return (f'<div class="dk-card dk-card--plain"><div class="dk-card__head">'
+            f'<span class="dk-card__icon">{ic("clipboard-text")}</span>'
             f'<span class="dk-card__title">{T("Review before adding", "जोड़ने से पहले जाँचें")}</span>'
-            f'<span class="dk-card__tag">{(ic("storefront") + " " + _esc(sup) + " · ") if sup else ""}'
-            f'{len(items)} {T("items", "चीज़ें")} · {_money(preview.get("total_cost"))}</span></div>'
-            f'{tbl}<div class="dk-hint deva">{_text(preview.get("message"))}</div></div>')
+            f'<span class="dk-card__tag">{sup_chip}{len(items)} {T("items", "चीज़ें")} · '
+            f'{_money(preview.get("total_cost"))}{mix}</span></div>'
+            f'<div class="dk-hint">{ic("pencil-simple")} '
+            f'{T("Edit any cell if needed, then tap Add to stock.", "ज़रूरत हो तो कोई भी जानकारी ठीक करें, फिर ‘स्टॉक में डालें’ दबाएँ।")}</div></div>')
 
 
 def receive_result_html(result: dict | None) -> str:
@@ -750,18 +750,29 @@ def receive_result_html(result: dict | None) -> str:
 
 
 # ============================================================ render: onboarding
-_ONB_STEPS = [
-    ("Profile", "प्रोफ़ाइल"), ("Stock", "सामान"), ("Khata", "खाता"),
-    ("Verify", "जाँच"), ("Done", "हो गया"),
-]
+# Setup is now a focused khata import, so the owner sees just three stages. The
+# onboarding FSM still has its 5 coarse states; we map its step index onto these.
+_SETUP_STEPS = [("Khata", "खाता"), ("Review", "जाँच"), ("Done", "हो गया")]
+
+
+def _setup_step_index(backend_idx: int) -> int:
+    """Map the FSM's coarse index (profile/rough/khata=0..2, verify/committing=3,
+    done=4) onto the 3-step Setup display (Khata / Review / Done)."""
+    if backend_idx >= 4:
+        return 2          # done
+    if backend_idx == 3:
+        return 1          # verify
+    return 0              # profile / rough_inventory / khata → "Khata"
 
 
 def _stepper(idx: int) -> str:
+    """Render the slim 3-step Setup progress bar from a backend step index."""
+    di = _setup_step_index(idx)
     parts = []
-    for i, (en, hi) in enumerate(_ONB_STEPS):
-        state = "dk-step--done" if i < idx else ("dk-step--active" if i == idx else "")
-        num = ic("check") if i < idx else str(i + 1)
-        line = '<div class="dk-step__line"></div>' if i < len(_ONB_STEPS) - 1 else ""
+    for i, (en, hi) in enumerate(_SETUP_STEPS):
+        state = "dk-step--done" if i < di else ("dk-step--active" if i == di else "")
+        num = ic("check") if i < di else str(i + 1)
+        line = '<div class="dk-step__line"></div>' if i < len(_SETUP_STEPS) - 1 else ""
         parts.append(
             f'<div class="dk-step {state}"><div class="dk-step__num">{num}</div>'
             f'<div class="dk-step__lab">{T(en, hi)}</div>{line}</div>')
@@ -771,7 +782,8 @@ def _stepper(idx: int) -> str:
 def onboarding_intro() -> str:
     return (f'<div class="dk-draftcard"><div class="dk-card__head"><span class="dk-card__icon">{ic("pencil-simple")}</span>'
             f'<span class="dk-card__title">{T("Open your own book", "अपना खाता खोलें")}</span></div>'
-            f'<p class="muted" style="margin:6px 0 0">{T("Replace the demo data with your real shop — add your stock by voice, photo, or by hand, snap your khata, review, and save. Takes a few minutes.", "डेमो डेटा की जगह अपनी असली दुकान डालें — सामान बोलकर/फ़ोटो से/हाथ से जोड़ें, अपना खाता फ़ोटो लें, जाँचें और सेव करें। कुछ ही मिनट।")}</p></div>')
+            f'<p class="muted" style="margin:6px 0 0">{T("Replace the demo khata with your real customers: snap your udhaar register, review who owes what, then save. Stock is added later from Receive (bills) or by chatting with Saathi.", "डेमो खाता हटाकर अपने असली ग्राहक डालें: अपना उधार रजिस्टर फ़ोटो लें, किसका कितना बाकी है जाँचें, फिर सेव करें। सामान बाद में ‘सामान’ (बिल) से या साथी से बात करके जुड़ता है।")}</p>'
+            f'{_stepper(0)}</div>')
 
 
 def onboarding_html(view: dict | None) -> str:
@@ -827,20 +839,19 @@ def onboarding_html(view: dict | None) -> str:
             f'<span class="dk-card__title">{T("Khata customers", "खाता ग्राहक")}</span>'
             f'<span class="dk-count dk-card__tag">{len(custs)}</span></div>{rows}</div>')
 
-    # verify totals
+    # verify totals — Setup is khata-only now, so show the customers + opening credit
+    # being imported (item/unit counts are always 0 here).
     if state == "verify":
         tot = view.get("totals") or {}
         blocks.append(
             f'<div class="dk-totals">'
-            f'<div class="dk-stat"><div class="v">{tot.get("item_count", 0)}</div><div class="k">{T("items", "चीज़ें")}</div></div>'
-            f'<div class="dk-stat"><div class="v">{_grp(tot.get("total_units", 0))}</div><div class="k">{T("units", "इकाई")}</div></div>'
             f'<div class="dk-stat"><div class="v">{tot.get("customer_count", 0)}</div><div class="k">{T("customers", "ग्राहक")}</div></div>'
             f'<div class="dk-stat"><div class="v">{_money(tot.get("opening_balance_total"))}</div><div class="k">{T("opening credit", "शुरुआती उधार")}</div></div>'
             f'</div>'
-            f'<div class="dk-banner dk-banner--info">{T("Looks right? Press Confirm & Save to make this your real shop.", "सब ठीक है? इसे अपनी असली दुकान बनाने के लिए ‘पक्का करें’ दबाएँ।")}</div>')
+            f'<div class="dk-banner dk-banner--info">{T("Looks right? Press Confirm & Save to import these as your real khata.", "सब ठीक है? इन्हें अपना असली खाता बनाने के लिए ‘पक्का करें’ दबाएँ।")}</div>')
 
     if not items and not custs and state != "verify":
-        blocks.append(f'<div class="dk-empty">{T("Add your first items below — by hand, voice, or photo.", "नीचे अपनी पहली चीज़ें जोड़ें — हाथ से, बोलकर या फ़ोटो से।")}</div>')
+        blocks.append(f'<div class="dk-empty">{T("Attach your khata photo above to import your real customers.", "अपने असली ग्राहक डालने के लिए ऊपर अपने खाते की फ़ोटो जोड़ें।")}</div>')
 
     return "".join(blocks)
 
@@ -881,26 +892,12 @@ def _parse_composer(mm) -> tuple[str, object, object]:
     return text, image, audio
 
 
-# A sentence boundary = a terminator (। . ! ? newline) FOLLOWED by whitespace, so a
-# decimal like "₹52.50" is never split mid-number (mirrors tts._veena_chunks).
-_SENT_BOUND = re.compile(r"[।.!?\n]\s")
-
-
-def _complete_prefix_len(text: str) -> int:
-    """Length of the leading run of COMPLETE sentences in ``text`` (rest is pending)."""
-    end = 0
-    for m in _SENT_BOUND.finditer(text or ""):
-        end = m.start() + 1   # include the terminator, drop the trailing space
-    return end
-
-
 def respond(mm, history, thread_id, reply_lang="en", mute="0"):
     """One shopkeeper turn from the chat composer (text / voice / image).
 
-    The reply is SPOKEN automatically (unless muted): a background thread
-    synthesizes each sentence as the LLM writes it and the audio streams to
-    ``audio_out`` (streaming=True), so the voice starts within ~1-2s and overlaps
-    the text. Yields ``(chat, audio_out, dashboard, confirm_row, composer, history)``.
+    Audio is NOT auto-played. When the speaker toggle is on, the reply's audio is
+    pre-generated in the background (``audio_cache``) so a later tap plays instantly.
+    Yields ``(chat, dashboard, confirm_row, composer, history)``.
     """
     history = list(history or [])
     text, image, audio = _parse_composer(mm)
@@ -916,59 +913,22 @@ def respond(mm, history, thread_id, reply_lang="en", mute="0"):
     history.append({"role": "user", "text": shown})
 
     # optimistic: show the question + a "Thinking…" indicator and clear the composer
-    yield (chat_html(history, typing=True, status=_THINKING), gr.update(), gr.update(),
+    yield (chat_html(history, typing=True, status=_THINKING), gr.update(),
            gr.update(visible=False), _EMPTY_MM, history)
 
-    # --- auto-speak: a worker thread synthesizes completed sentences (fed via
-    # synth_q) into audio_q WHILE the text keeps streaming, so the voice overlaps
-    # the writing. Best-effort — a slow/broken voice path only drops audio. ----
-    speak_on = str(mute) not in ("1", "true", "True", "on")
-    synth_q: queue.Queue = queue.Queue()
-    audio_q: queue.Queue = queue.Queue()
-    _DONE = object()
-
-    def _tts_worker():
-        try:
-            while True:
-                seg = synth_q.get()
-                if seg is None:
-                    break
-                try:
-                    for chunk in session.speak_stream(seg):
-                        audio_q.put(chunk)
-                except Exception:  # noqa: BLE001 — never break the turn on the voice path
-                    pass
-        finally:
-            audio_q.put(_DONE)
-
-    if speak_on:
-        threading.Thread(target=_tts_worker, daemon=True).start()
-
-    audio_emitted = False
-
-    def _next_audio():
-        """A ready ``(sr,ndarray)`` chunk, else ``gr.update()`` (non-blocking)."""
-        nonlocal audio_emitted
-        if not speak_on:
-            return gr.update()
-        try:
-            item = audio_q.get_nowait()
-        except queue.Empty:
-            return gr.update()
-        if item is _DONE:
-            return gr.update()
-        audio_emitted = True
-        return item
+    # voice toggle ("0" = on): when on, pre-generate this reply's audio in the
+    # background so tapping the speaker icon plays instantly (no auto-play).
+    prep_on = str(mute) not in ("1", "true", "True", "on")
 
     # The bot bubble is added only once real answer text arrives — until then we
     # keep the dots + a status label ("Checking the books…") so the empty bubble
     # never flashes.
     bot_added = False
     bi = None
+    bot_mid = None
     dash_out = gr.update()
     pend_vis = False
     last_len = 0
-    spoken = 0          # reply_text index up to which sentences were queued for TTS
     final_txt = ""
     for tr in session.handle_turn_stream(audio=audio, text=text or None, image=image,
                                          thread_id=thread_id, tts=False, reply_lang=reply_lang):
@@ -981,20 +941,14 @@ def respond(mm, history, thread_id, reply_lang="en", mute="0"):
         if not txt.strip():
             # pre-answer phase: dots + what the agent is doing (tool/DB call)
             yield (chat_html(history, typing=True, status=_STATUS.get(tr.status, _THINKING)),
-                   _next_audio(), gr.update(), gr.update(visible=False), _EMPTY_MM, history)
+                   gr.update(), gr.update(visible=False), _EMPTY_MM, history)
             continue
 
         final_txt = txt
-        # queue any newly-completed sentence(s) for the speaker thread
-        if speak_on:
-            cp = _complete_prefix_len(txt)
-            if cp > spoken:
-                synth_q.put(txt[spoken:cp])
-                spoken = cp
-
         if not bot_added:
             bi = len(history)
-            history.append({"role": "bot", "text": txt, "intent": tr.intent_badge})
+            bot_mid = uuid.uuid4().hex
+            history.append({"role": "bot", "text": txt, "intent": tr.intent_badge, "mid": bot_mid})
             bot_added = True
         else:
             history[bi]["text"] = txt
@@ -1009,55 +963,52 @@ def respond(mm, history, thread_id, reply_lang="en", mute="0"):
                 dash_out = dashboard_html(tr.dashboard_snapshot)
             pend_vis = bool(tr.pending_confirmation)
             last_len = len(txt)
-            yield (chat_html(history), _next_audio(), dash_out,
+            yield (chat_html(history), dash_out,
                    gr.update(visible=pend_vis), _EMPTY_MM, history)
 
-    # text done → flush the trailing sentence, then drain the remaining audio
-    # (audio-only yields; bounded so a stuck voice path can't hang the turn).
-    if speak_on:
-        if final_txt and len(final_txt) > spoken:
-            synth_q.put(final_txt[spoken:])
-        synth_q.put(None)
-        while True:
-            try:
-                item = audio_q.get(timeout=30)
-            except queue.Empty:
-                break
-            if item is _DONE:
-                break
-            audio_emitted = True
-            yield (gr.update(), item, gr.update(), gr.update(), gr.update(), gr.update())
-
-    # A streaming gr.Audio that never received a chunk (muted, or an empty reply)
-    # errors on finalize — end with a tiny inaudible silence so it closes cleanly.
-    if not audio_emitted:
-        yield (gr.update(), _SILENCE_CHUNK, gr.update(), gr.update(), gr.update(), gr.update())
+    # text done → pre-generate this reply's audio in the background (headroom), so
+    # tapping the speaker icon plays instantly. Gated by the speaker toggle.
+    if prep_on and bot_mid and final_txt and final_txt.strip():
+        audio_cache.prepare_async(bot_mid, final_txt)
 
 
-def confirm(answer, thread_id, history):
+def confirm(answer, thread_id, history, mute="0"):
     history = list(history or [])
     r = session.confirm_pending(answer, thread_id=thread_id, tts=False)
-    history.append({"role": "bot", "text": r.reply_text, "intent": "write"})
+    mid = uuid.uuid4().hex
+    history.append({"role": "bot", "text": r.reply_text, "intent": "write", "mid": mid})
     dash = dashboard_html(r.dashboard_snapshot or session.dashboard_snapshot_struct())
-    return chat_html(history), None, dash, gr.update(visible=False), history
+    if str(mute) not in ("1", "true", "True", "on") and r.reply_text and r.reply_text.strip():
+        audio_cache.prepare_async(mid, r.reply_text)
+    return chat_html(history), dash, gr.update(visible=False), history
 
 
-def speak(idx, history):
-    """On-demand STREAMING TTS for one bot message (by chat index) → audio_out.
+def _served_url(path: str) -> str:
+    """A Gradio file URL for a cached WAV (served via launch ``allowed_paths``), plus a
+    nonce so the hidden #dk-audio-url textbox value changes on every tap (so
+    re-listening the same reply still re-fires the watcher in head.html)."""
+    return f"/gradio_api/file={path}|{uuid.uuid4().hex}"
 
-    A generator: yields one ``(sr, ndarray)`` per sentence so the speaker starts
-    playing within ~1-2s instead of after the whole reply is synthesized. ``idx``
-    arrives as ``"<index>|<nonce>"`` (the nonce guarantees the textbox value
-    changes on every click, so repeat-listens still fire the event).
+
+def play(arg, history, mute="0"):
+    """Return a served audio URL for one bot message → the #dk-audio-url textbox.
+
+    ``arg`` arrives as ``"<mid>|<nonce>"`` from the JS bridge. The reply's audio is
+    usually pre-generated (instant); otherwise it synthesizes on demand (the UI shows
+    a spinner). head.html plays the URL through its own <audio> element.
     """
     try:
-        text = (history or [])[int(str(idx).split("|")[0])].get("text", "")
-    except (TypeError, ValueError, IndexError, AttributeError):
-        return
+        mid = str(arg).split("|")[0]
+    except Exception:  # noqa: BLE001
+        return gr.update()
+    msg = next((m for m in (history or []) if m.get("mid") == mid), None)
+    if not msg:
+        return gr.update()
+    text = msg.get("text", "")
     if not (text and text.strip()):
-        return
-    for chunk in session.speak_stream(text):
-        yield chunk
+        return gr.update()
+    path = audio_cache.ensure_ready(mid, text, timeout=120)
+    return _served_url(path) if path else gr.update()
 
 
 # ---- chat sessions (New Chat + revisitable past chats) ---------------------
@@ -1094,7 +1045,7 @@ def new_chat(chats, history, thread_id):
 
     The previous transcript is kept in ``chats`` (and its messages stay in the
     agent's InMemorySaver under the old thread_id), so it can be reopened.
-    Returns ``(chats, history, thread_id, chat, chats_bar, confirm_row, audio_out)``.
+    Returns ``(chats, history, thread_id, chat, chats_bar, confirm_row)``.
     """
     chats = list(chats or [])
     history = list(history or [])
@@ -1103,7 +1054,7 @@ def new_chat(chats, history, thread_id):
         chats.append({"id": thread_id, "title": _chat_title(history), "history": history})
     new_tid = uuid.uuid4().hex
     return (chats, [], new_tid, chat_html([]), chats_html(chats),
-            gr.update(visible=False), None)
+            gr.update(visible=False))
 
 
 def open_chat(token, chats, history, thread_id):
@@ -1146,24 +1097,20 @@ def refresh_views():
 
 
 def load_briefing(mute="0"):
-    """Generate the morning briefing, show it, then auto-speak it (unless muted).
-
-    A generator: first yield the text to the briefing panel, then stream the audio
-    sentence-by-sentence to ``audio_out`` so it plays right after it appears.
+    """Generate the morning briefing, show it, then return its audio file so the
+    browser plays it on tap (one app voice, generated on demand). A generator:
+    yield the text first, then the audio path.
     """
-    audio_emitted = False
     try:
         text = session.morning_briefing(tts=False)["text"]
         yield briefing_html(text), gr.update()
     except Exception as e:  # noqa: BLE001 — best-effort
         yield briefing_html(f"{_ERROR_HI}\n{e}"), gr.update()
-        text = ""
-    if str(mute) not in ("1", "true", "True", "on") and text and text.strip():
-        for chunk in session.speak_stream(text):
-            audio_emitted = True
-            yield gr.update(), chunk
-    if not audio_emitted:   # streaming audio needs ≥1 chunk to finalize cleanly
-        yield gr.update(), _SILENCE_CHUNK
+        return
+    if text and text.strip():
+        path = audio_cache.ensure_ready("briefing-" + uuid.uuid4().hex, text, timeout=120)
+        if path:
+            yield gr.update(), _served_url(path)
 
 
 def refresh_khata():
@@ -1199,50 +1146,89 @@ def refresh_stock():
     return stock_html(session.dashboard_snapshot_struct())
 
 
+def _rcv_rows(preview: dict) -> list[list]:
+    """Editable-table rows ``[[name, qty, rate, mrp, expiry], ...]`` from a staged preview.
+
+    Shows the bill's OWN item name (``input_name``), not the resolved SKU name — the
+    owner is reviewing what the bill says. Merge-vs-new is decided (exact-match only)
+    under the hood at commit, so a precise bill line is never silently renamed."""
+    rows: list[list] = []
+    for it in (preview.get("items") or []):
+        rows.append([
+            it.get("input_name") or it.get("resolved_name") or "",
+            it.get("qty", 0),
+            it.get("rate"),
+            it.get("mrp"),
+            it.get("estimated_expiry") or "",
+        ])
+    return rows
+
+
+def _rcv_cell(v):
+    """A gr.Dataframe cell → a clean scalar string, or ``None`` for a blank cell."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
 def receive_parse(image):
+    """Read the bill → fill the editable table and reveal "Add to stock".
+
+    Returns ``(status panel, rcv_table update, rcv_commit update, preview state)``.
+    """
     if image is None:
-        return _receive_hint(), None
+        return (_receive_hint(), gr.update(value=[], visible=False),
+                gr.update(visible=False), None)
     preview = receiving.stage_receive(image=image)
-    return receive_preview_html(preview), (preview if preview.get("ok") else None)
+    if not preview.get("ok"):
+        return (receive_error_html(preview.get("message")),
+                gr.update(value=[], visible=False), gr.update(visible=False), None)
+    return (receive_summary_html(preview),
+            gr.update(value=_rcv_rows(preview), visible=True),
+            gr.update(visible=True), preview)
 
 
-def receive_commit(preview):
-    if not preview or not preview.get("items"):
-        return (_receive_hint(), None,
-                refresh_dashboard(), refresh_stock())
-    result = receiving.commit_receive(preview["items"], supplier=preview.get("supplier"))
-    return (receive_result_html(result), None,
+def receive_commit(table_rows, preview):
+    """Add the (possibly edited) table to stock.
+
+    Rebuilds line dicts from the edited rows, re-stages them (re-resolving merge/new
+    and keeping any edited expiry), then commits. Returns ``(status, rcv_table,
+    rcv_commit, preview, Today dash, Stock)``.
+    """
+    rows = table_rows or []
+    if not rows:
+        return (_receive_hint(), gr.update(value=[], visible=False),
+                gr.update(visible=False), None, refresh_dashboard(), refresh_stock())
+    supplier = (preview or {}).get("supplier")
+    lines: list[dict] = []
+    for r in rows:
+        r = list(r)
+        name = _rcv_cell(r[0]) if len(r) > 0 else None
+        if not name:
+            continue   # skip blank / spare dynamic rows the owner left empty
+        lines.append({
+            "name": name,
+            "qty": _rcv_cell(r[1]) if len(r) > 1 else None,
+            "rate": _rcv_cell(r[2]) if len(r) > 2 else None,
+            "mrp": _rcv_cell(r[3]) if len(r) > 3 else None,
+            "expiry": _rcv_cell(r[4]) if len(r) > 4 else None,
+        })
+    if not lines:
+        # keep the table + button visible so the owner can fix it
+        return (receive_error_html(T("No items to add. Fill at least one row.",
+                                     "जोड़ने के लिए कोई चीज़ नहीं। कम से कम एक पंक्ति भरें।")),
+                gr.update(), gr.update(), preview, refresh_dashboard(), refresh_stock())
+    restaged = receiving.stage_receive(lines=lines, supplier_hint=supplier)
+    result = receiving.commit_receive(restaged.get("items", []), supplier=supplier)
+    return (receive_result_html(result),
+            gr.update(value=[], visible=False),   # hide + clear the table
+            gr.update(visible=False),             # hide "Add to stock"
+            None,                                 # clear preview
             refresh_dashboard(), refresh_stock())
 
 
-# ---- onboarding handlers
-def onb_begin():
-    return onboarding_html(onboarding.start_onboarding(resume=True))
-
-
-def onb_profile(owner, shop, lang):
-    return onboarding_html(onboarding.set_profile(owner or "", shop or "", lang or "hi"))
-
-
-def onb_manual(name, qty, cat):
-    if not (name or "").strip():
-        return onboarding_html(onboarding.start_onboarding(resume=True)), "", 1, ""
-    view = onboarding.add_inventory_item_manual(name, qty or 1, cat or "")
-    return onboarding_html(view), "", 1, ""
-
-
-def onb_voice(audio):
-    if audio is None:
-        return onboarding_html(onboarding.start_onboarding(resume=True)), None
-    return onboarding_html(onboarding.capture_inventory_voice(audio)), None
-
-
-def onb_photo(image):
-    if image is None:
-        return onboarding_html(onboarding.start_onboarding(resume=True)), None
-    return onboarding_html(onboarding.capture_inventory_photo(image)), None
-
-
+# ---- onboarding handlers (Setup is khata-only: read khata → review → confirm)
 def onb_khata(image):
     if image is None:
         return onboarding_html(onboarding.start_onboarding(resume=True)), None
@@ -1327,15 +1313,15 @@ def build_ui() -> gr.Blocks:
                     elem_id="dk-composer", elem_classes=["dk-composer"],
                 )
                 _panel(f'<div class="dk-hint">{ic("speaker-high")} '
-                       f'{T("Replies play aloud · use the speaker toggle up top to mute.", "जवाब आवाज़ में आते हैं · ऊपर स्पीकर बटन से बंद करें।")}</div>')
-                # streaming=True: speak() yields one sentence at a time, so audio
-                # starts within ~1-2s and plays the chunks back-to-back as they arrive.
-                audio_out = gr.Audio(streaming=True, autoplay=True, show_label=False,
-                                     elem_id="dk-audio-out")
-                # hidden bridge: a message's speaker icon → JS writes "<idx>|<nonce>"
-                # here and fires its input event → speak() synthesizes just that
-                # message → audio_out. NB: CSS-hidden (not visible=False) — Gradio 6
-                # drops visible=False nodes from the DOM, so JS couldn't reach them.
+                       f'{T("Tap the speaker on a reply to hear it aloud.", "किसी जवाब पर स्पीकर दबाएँ — आवाज़ में सुनें।")}</div>')
+                # Hidden bridge: play()/load_briefing() put a served audio URL here;
+                # head.html plays it through its own <audio> (full play/pause control).
+                audio_url = gr.Textbox(show_label=False, container=False,
+                                       elem_id="dk-audio-url", elem_classes=["dk-hidden"])
+                # hidden bridge: a message's speaker icon → JS writes "<mid>|<nonce>"
+                # here + clicks dk-speak-btn → play() returns that message's audio.
+                # NB: CSS-hidden (not visible=False) — Gradio 6 drops visible=False
+                # nodes from the DOM, so JS couldn't reach them.
                 speak_idx = gr.Textbox(show_label=False, container=False,
                                        elem_id="dk-speak-idx", elem_classes=["dk-hidden"])
                 speak_btn = gr.Button("speak", elem_id="dk-speak-btn", elem_classes=["dk-hidden"])
@@ -1385,53 +1371,36 @@ def build_ui() -> gr.Blocks:
                     _panel(f'<div class="dk-inlabel">{ic("camera")} {T("Photo of the challan / bill", "चालान / बिल की फ़ोटो")}</div>')
                     rcv_img = gr.Image(sources=["upload", "webcam"], type="pil",
                                        show_label=False, elem_classes=["dk-input"])
+                # Step 1 (always visible): read the bill. Step 2 ("Add to stock" + the
+                # editable table) appears only after a successful read.
                 with gr.Row(elem_classes=["dk-btnrow"]):
                     rcv_parse = _btn(ic("magnifying-glass") + " " + T("Read the bill", "बिल पढ़ें"), kind="primary")
-                    rcv_commit = _btn(ic("check") + " " + T("Add to stock", "स्टॉक में डालें"), kind="gold")
                 _panel('<div class="spacer-8"></div>')
-                rcv_view = _panel(_receive_hint())   # preview / result lands here, below the buttons
+                rcv_view = _panel(_receive_hint())   # hint → summary → result lands here
+                # Editable line-items: owner fixes name / qty / rate / MRP / expiry, then adds.
+                rcv_table = gr.Dataframe(
+                    headers=["Item · चीज़", "Qty · मात्रा", "Rate ₹", "MRP ₹", "Expiry · एक्सपायरी"],
+                    datatype=["str", "number", "number", "number", "str"],
+                    column_count=(5, "fixed"), row_count=(1, "dynamic"),
+                    type="array", interactive=True, visible=False, show_label=False,
+                    elem_classes=["dk-input", "dk-rcv-table"],
+                )
+                with gr.Row(elem_classes=["dk-btnrow"], visible=False) as rcv_commit_row:
+                    rcv_commit = _btn(ic("check") + " " + T("Add to stock", "स्टॉक में डालें"), kind="gold")
 
             # ---------------------------------------------------------- SETUP
             with gr.Column(elem_id="page-setup", elem_classes=["dk-page"]):
                 _panel(_secthead(ic("pencil-simple"), "Set up your shop", "अपनी दुकान सेट करें",
                                  meta=_page_date_meta()))
                 onb_view = _panel(onboarding_intro())
-                begin_btn = _btn(ic("pencil-simple") + " " + T("Begin setup", "शुरू करें"), kind="primary")
-                _panel('<div class="spacer-16"></div>')
+                _panel('<div class="spacer-8"></div>')
+                # Setup is a focused khata importer now: snap the udhaar register, review,
+                # save. (Stock & profile come from Receive / chat, so those forms are gone.)
                 with gr.Group(elem_classes=["dk-inputcard"]):
-                    _panel(f'<div class="dk-inlabel">1 · {T("Shop profile", "दुकान प्रोफ़ाइल")}</div>')
-                    with gr.Row():
-                        onb_owner = gr.Textbox(show_label=False, placeholder="Owner name · दुकानदार का नाम",
-                                               elem_classes=["dk-input"])
-                        onb_shop = gr.Textbox(show_label=False, placeholder="Shop name · दुकान का नाम",
-                                              elem_classes=["dk-input"])
-                        onb_lang = gr.Textbox(show_label=False, value="hi", placeholder="lang",
-                                              scale=0, elem_classes=["dk-input"])
-                    onb_save = _btn(ic("floppy-disk") + " " + T("Save profile", "प्रोफ़ाइल सेव करें"), kind="ghost")
-                with gr.Group(elem_classes=["dk-inputcard"]):
-                    _panel(f'<div class="dk-inlabel">2 · {T("Add stock", "सामान जोड़ें")}</div>')
-                    with gr.Row():
-                        onb_name = gr.Textbox(show_label=False, placeholder="Item · चीज़", elem_classes=["dk-input"])
-                        onb_qty = gr.Number(value=1, show_label=False, scale=0, elem_classes=["dk-input"])
-                        onb_cat = gr.Textbox(show_label=False, placeholder="Category · श्रेणी", elem_classes=["dk-input"])
-                    onb_add = _btn(ic("plus") + " " + T("Add by hand", "हाथ से जोड़ें"), kind="ghost")
-                    _panel('<div class="spacer-8"></div>')
-                    with gr.Row():
-                        with gr.Column():
-                            _panel(f'<div class="dk-inlabel">{ic("microphone")} {T("…or say your stock", "…या सामान बोलें")}</div>')
-                            onb_audio = gr.Audio(sources=["microphone", "upload"], type="numpy",
-                                                 show_label=False, elem_classes=["dk-input"])
-                            onb_voice_btn = _btn(ic("microphone") + " " + T("Add from voice", "बोलकर जोड़ें"), kind="ghost")
-                        with gr.Column():
-                            _panel(f'<div class="dk-inlabel">{ic("image")} {T("…or a shelf photo", "…या शेल्फ़ की फ़ोटो")}</div>')
-                            onb_image = gr.Image(sources=["upload", "webcam"], type="pil",
-                                                 show_label=False, elem_classes=["dk-input"])
-                            onb_photo_btn = _btn(ic("image") + " " + T("Add from photo", "फ़ोटो से जोड़ें"), kind="ghost")
-                with gr.Group(elem_classes=["dk-inputcard"]):
-                    _panel(f'<div class="dk-inlabel">3 · {T("Khata photo (optional)", "खाता फ़ोटो (वैकल्पिक)")}</div>')
+                    _panel(f'<div class="dk-inlabel">{ic("notebook")} {T("Photo of your khata (udhaar register)", "अपने खाते (उधार रजिस्टर) की फ़ोटो")}</div>')
                     onb_khata_img = gr.Image(sources=["upload", "webcam"], type="pil",
                                              show_label=False, elem_classes=["dk-input"])
-                    onb_khata_btn = _btn(ic("notebook") + " " + T("Read my khata", "मेरा खाता पढ़ें"), kind="ghost")
+                    onb_khata_btn = _btn(ic("notebook") + " " + T("Read my khata", "मेरा खाता पढ़ें"), kind="primary")
                 with gr.Row(elem_classes=["dk-btnrow"]):
                     onb_to_verify = _btn(ic("magnifying-glass") + " " + T("Review", "जाँचें"), kind="primary")
                     onb_commit_btn = _btn(ic("check") + " " + T("Confirm & Save", "पक्का करें"), kind="gold")
@@ -1439,30 +1408,34 @@ def build_ui() -> gr.Blocks:
 
         # ===================================================== wiring
         # Talk
-        turn_out = [chat, audio_out, dash, confirm_row, composer, history]
+        turn_out = [chat, dash, confirm_row, composer, history]
         composer.submit(respond, [composer, history, thread_id, lang_state, mute_state], turn_out)
 
-        conf_out = [chat, audio_out, dash, confirm_row, history]
-        haan_btn.click(lambda tid, h: confirm("haan", tid, h),
-                       [thread_id, history], conf_out)
-        nahi_btn.click(lambda tid, h: confirm("nahi", tid, h),
-                       [thread_id, history], conf_out)
+        conf_out = [chat, dash, confirm_row, history]
+        haan_btn.click(lambda tid, h, m: confirm("haan", tid, h, m),
+                       [thread_id, history, mute_state], conf_out)
+        nahi_btn.click(lambda tid, h, m: confirm("nahi", tid, h, m),
+                       [thread_id, history, mute_state], conf_out)
 
         # New Chat → fresh context; the old transcript moves into chats_bar (reopenable)
         new_chat_btn.click(new_chat, [chats, history, thread_id],
-                           [chats, history, thread_id, chat, chats_bar, confirm_row, audio_out])
+                           [chats, history, thread_id, chat, chats_bar, confirm_row]
+                           ).then(None, None, None,
+                                  js="() => window.dukaanStopAudio && window.dukaanStopAudio()")
         # a past-chat chip (JS bridge) → restore that conversation + its thread_id
         openchat_btn.click(open_chat, [openchat_id, chats, history, thread_id],
-                           [chats, history, thread_id, chat, chats_bar, confirm_row])
+                           [chats, history, thread_id, chat, chats_bar, confirm_row]
+                           ).then(None, None, None,
+                                  js="() => window.dukaanStopAudio && window.dukaanStopAudio()")
 
-        # per-message speaker icon → on-demand STREAMING TTS into audio_out
+        # per-message speaker icon → cached/on-demand audio URL → audio_url textbox
         # (JS sets speak_idx's value+nonce, fires input+change to commit it, then
         # clicks this hidden button which reads the committed value)
-        speak_btn.click(speak, [speak_idx, history], audio_out)
+        speak_btn.click(play, [speak_idx, history, mute_state], audio_url)
 
         # Today
         refresh_btn.click(refresh_dashboard, None, dash)
-        brief_btn.click(load_briefing, [mute_state], [briefing, audio_out])
+        brief_btn.click(load_briefing, [mute_state], [briefing, audio_url])
         # opening a data tab (head.html clicks this hidden button) re-renders all three
         refresh_btn_hidden.click(refresh_views, None, [dash, stock, khata])
 
@@ -1472,16 +1445,12 @@ def build_ui() -> gr.Blocks:
         # Stock
         stock_refresh.click(refresh_stock, None, stock)
 
-        # Receive
-        rcv_parse.click(receive_parse, rcv_img, [rcv_view, preview])
-        rcv_commit.click(receive_commit, preview, [rcv_view, preview, dash, stock])
+        # Receive: read the bill → editable table + reveal "Add to stock"; then commit
+        rcv_parse.click(receive_parse, rcv_img, [rcv_view, rcv_table, rcv_commit_row, preview])
+        rcv_commit.click(receive_commit, [rcv_table, preview],
+                         [rcv_view, rcv_table, rcv_commit_row, preview, dash, stock])
 
-        # Setup / onboarding
-        begin_btn.click(onb_begin, None, onb_view)
-        onb_save.click(onb_profile, [onb_owner, onb_shop, onb_lang], onb_view)
-        onb_add.click(onb_manual, [onb_name, onb_qty, onb_cat], [onb_view, onb_name, onb_qty, onb_cat])
-        onb_voice_btn.click(onb_voice, onb_audio, [onb_view, onb_audio])
-        onb_photo_btn.click(onb_photo, onb_image, [onb_view, onb_image])
+        # Setup / onboarding (khata-only): read khata → review → confirm & save
         onb_khata_btn.click(onb_khata, onb_khata_img, [onb_view, onb_khata_img])
         onb_to_verify.click(onb_verify, None, onb_view)
         onb_commit_btn.click(onb_commit, None, onb_view)
@@ -1530,15 +1499,32 @@ def build_head() -> str:
 
 def main() -> None:
     _warmup_async()
-    build_ui().queue().launch(
-        server_name=config.GRADIO_HOST,
-        server_port=config.GRADIO_PORT,
-        share=config.GRADIO_SHARE,
-        head=build_head(),
-        theme=gr.themes.Base(),
+
+    # Gradio is mounted under a small FastAPI app so the build write-up (blog.html)
+    # and its figures are reachable as plain routes on the same Space: the UI at /,
+    # the write-up at /blog, and its images under /figures/*.
+    root = Path(__file__).resolve().parent.parent
+    api = FastAPI()
+
+    @api.get("/blog", include_in_schema=False)
+    def _blog():
+        return FileResponse(root / "blog.html", media_type="text/html")
+
+    figures = root / "figures"
+    if figures.is_dir():
+        api.mount("/figures", StaticFiles(directory=str(figures)), name="figures")
+
+    app = gr.mount_gradio_app(
+        api,
+        build_ui().queue(),
+        path="/",
+        allowed_paths=[audio_cache._DIR],  # serve the per-message TTS WAV files
         ssr_mode=False,
         show_error=True,
+        theme=gr.themes.Base(),
+        head=build_head(),
     )
+    uvicorn.run(app, host=config.GRADIO_HOST, port=config.GRADIO_PORT)
 
 
 if __name__ == "__main__":

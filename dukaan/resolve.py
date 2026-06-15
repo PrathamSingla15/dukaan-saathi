@@ -80,7 +80,7 @@ def _brand_vocab() -> frozenset[str]:
     except Exception:
         pass  # missing/empty DB -> rely on seed brands only
     try:
-        from dukaan import seed_inventory as si
+        from dukaan import catalog as si
 
         for it in si.CATALOG:
             b = (it.get("brand") or "").strip().lower()

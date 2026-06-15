@@ -1,7 +1,7 @@
 """Shelf-life estimation helpers for Dukaan Saathi.
 
 Derives expiry dates from per-SKU ``shelf_life_days`` encoded in
-:mod:`dukaan.seed_inventory`, using exact-match → fuzzy-match → category
+:mod:`dukaan.catalog`, using exact-match → fuzzy-match → category
 median resolution.  Pure module: no database access, no network, no config
 dependency.
 """
@@ -13,7 +13,7 @@ import difflib
 import statistics
 from typing import Optional
 
-from dukaan.seed_inventory import CATALOG
+from dukaan.catalog import CATALOG
 
 # ---------------------------------------------------------------------------
 # Module-level lookup maps built once at import time.

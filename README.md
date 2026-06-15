@@ -6,106 +6,104 @@ colorTo: red
 sdk: docker
 app_port: 7860
 pinned: false
-short_description: Hindi voice + photo inventory & udhaar ledger for kiranas
+short_description: Hindi voice + photo assistant that keeps a kirana shop's stock and udhaar
 ---
 
-# 🏪 Dukaan Saathi
+# Dukaan Saathi
 
-> A Hindi-first, voice-driven **inventory + udhaar (credit) ledger** assistant for a small kirana shop owner.
-> *Small enough to run cheaply, big enough to change a shopkeeper's day.*
+A Hindi-first assistant for a small kirana (corner) shop. The owner just talks, or shows a photo of a bill, and the app keeps the two things that used to live on paper: the stock, and the *udhaar*, the running credit customers pay back later. It also watches the shelf, flags what is about to expire or is not selling, suggests a discount to clear slow stock, and reminds the owner to restock before a festival.
 
-Built for the **Build Small Hackathon · Backyard AI track**. See [`design.md`](design.md) for the full architecture.
+Built for the **Build Small Hackathon**, Backyard AI track. Everything runs on open-weight models, each well under 32B. For the demo those models are self-hosted on Modal, with no proprietary cloud AI anywhere in the loop.
 
-> **Deployment:** runs as a Hugging Face **Gradio Space**; the LLM (llama.cpp `llama-server` — Gemma-4-12B or MiniCPM-V) is served on **Modal**, while STT (faster-whisper) + TTS (Veena) run in the Space. See [`docs/sponsor-models.md`](docs/sponsor-models.md).
+- Live Space: https://huggingface.co/spaces/build-small-hackathon/dukaan-saathi
+- Blog (Field Notes): https://build-small-hackathon-dukaan-saathi.hf.space/blog
+- Demo video: _add link_
+- Social post: _add link_
+- Code: https://github.com/PrathamSingla15/dukaan-saathi
 
-The shopkeeper just **talks in Hindi** (or snaps a photo of a bill / label). Everything else — stock, sales, purchases, credit, expiry alerts, festival nudges, polite payment reminders — is handled automatically.
+## Architecture
+
+![Dukaan Saathi turns a spoken line or a bill photo into a finished ledger entry, in five steps](figures/dukaan_final.png)
+
+One shopkeeper turn runs through five steps:
+
+1. **Hear and read.** faster-whisper turns Hindi speech into text. For a bill or *khata* photo, Surya OCR does a first pass over the page, then Gemma reads it.
+2. **Decide.** Gemma 4 (12B, with vision) runs as a deepagents loop and picks the right tool.
+3. **Act.** Tools split in two: writes (add stock, record a sale, note credit, record a payment) and reads (the day's dashboard, a customer's dues, why an item is not moving).
+4. **Confirm.** Anything that would write is read back as a yes/no question. Nothing is saved until the owner says yes.
+5. **Reply.** The answer shows up in the Bahi-Khata ledger screen. When the owner taps the speaker, Veena (with a SNAC decoder) reads it back in one steady Hindi voice.
+
+See [`design.md`](design.md) for the full design.
+
+## What it does
+
+- **Voice credit book.** *"Sharma ji ne 200 ka udhaar liya"* stages an entry; *"kiska kitna baaki hai?"* returns a ranked list of who owes what.
+- **Receive stock by photo.** Hold up the supplier bill. The lines come into a table you can fix before anything is saved, with an estimated expiry when the bill prints none.
+- **Expiry and FEFO.** Sells the oldest stock first and warns before items go off.
+- **Festival nudges.** Restock reminders before demand jumps, not after.
+- **"Why isn't X selling?"** Reasons over the sales trend, the stock, and the price, then gives a plain answer and a fix, such as a small clearance discount.
+- **Polite reminders.** Drafts a Hindi collection message for overdue credit, and never sends it on its own.
+- **Money at a glance.** Cost, price, and margin per item, the value of everything on the shelf, and the day's takings.
+
+Two rails keep it safe: it never writes to the books without a yes, and it never sells stock the shop does not have.
 
 ## Stack (open-weight models, ≤32B)
 
 | Layer | Choice |
 |---|---|
-| LLM + Vision/OCR | **Gemma-4-12B** (multimodal, Q8_0 GGUF) via **llama.cpp** (`llama-server`, OpenAI-compatible) |
-| Agentic framework | **deepagents** (LangChain) driving the local model via `ChatOpenAI` |
-| Speech → Text | **faster-whisper** `large-v3` (Hindi, numpy-in, no system ffmpeg) |
-| Text → Speech | **Veena** (`maya-research/veena-tts`, gated) — speaks Hindi/English/**Hinglish** via a SNAC decoder (`hubertsiuzdak/snac_24khz`) |
-| Database | **two SQLite databases** — `inventory.db` (catalog/stock) + `transactions.db` (sales/khata), unified read via `ATTACH` |
-| Frontend | **Gradio** single-screen app (mic · photo · chat · today-dashboard) |
+| LLM + vision | **Gemma 4 (12B)**, Q4_K_M GGUF, via **llama.cpp** (`llama-server`, OpenAI-compatible `/v1`) |
+| Bill OCR pre-pass | **Surya** |
+| Agent | **deepagents** (LangChain) driving the local model |
+| Speech to text | **faster-whisper** large-v3 (Hindi) |
+| Text to speech | **Veena** (Hindi / Hinglish) with a **SNAC** decoder |
+| Database | two **SQLite** files, `inventory.db` + `transactions.db`, read together via `ATTACH` |
+| Frontend | custom **Gradio** "Bahi-Khata" single-screen app |
 
-## Quickstart
+## Hosting (Modal + HF Space)
 
-```bash
-# 1. Install deps (uv)
-uv sync
+The Hugging Face Space runs the Gradio UI on CPU; all GPU work is on Modal, in one app (`dukaan-llm`, `scripts/modal_app.py`) split across two warm L4 GPUs so neither model starves:
 
-# 2. Download models (Gemma GGUF + mmproj, Whisper, Veena + SNAC)
-#    Veena is a gated HF repo — `huggingface-cli login` with an authorized token first.
-bash scripts/download_models.sh
+- **GPU 1 (L4)** runs the LLM + vision/OCR: llama.cpp `llama-server` with Gemma 4 (12B) GGUF, served OpenAI-compatible at `/v1`.
+- **GPU 2 (L4)** runs speech: faster-whisper for STT and Veena + SNAC for TTS, at `/stt` and `/tts`.
 
-# 3. Build + seed the two demo databases (inventory.db + transactions.db)
-uv run python -m dukaan.db --reset
+Both stay warm with `min_containers=1`. Deploy with `MODAL_PROFILE=projects-ps MIN_CONTAINERS=1 PYTHONPATH="$PWD" modal deploy scripts/modal_app.py`, then point the Space at the two URLs through the secrets `DUKAAN_LLM_BASE_URL` / `DUKAAN_STT_BASE_URL` / `DUKAAN_TTS_BASE_URL`, plus `HF_TOKEN` for the gated Veena weights.
 
-# 4a. Run everything under Slurm (recommended on the cluster) — llama-server + Gradio
-sbatch scripts/run.sbatch
+A config-only swap to **MiniCPM-V 4.6** (≤4B) runs the same app on a smaller vision stack.
 
-# 4b. ...or run locally for quick debugging
-bash scripts/serve_llm.sh &        # starts llama-server on :8080
-uv run python -m dukaan.app        # starts Gradio on :7860
-```
+## Tracks and badges
 
-## What it does
-
-- **Voice credit ledger** — *"Sharma ji ne 200 ka udhaar liya"* / *"kiska kitna baaki hai?"*
-- **Inventory + expiry** — track stock, flag items nearing expiry
-- **Festival-aware stock-up nudge** — restock reminders before demand spikes
-- **"Why isn't X selling?" diagnostic** — multi-turn agentic reasoning over sales trends
-- **Reminder drafter** — drafts a polite Hindi collection message for overdue udhaar
-- **Margin & stock-value visibility** — selling price · purchase price · MRP per item
-
-## Hosting & deployment (Modal + HF Space)
-
-The live submission is a **Hugging Face Docker Space** that offloads all GPU work to **Modal**:
-
-- **Modal** (`scripts/modal_app.py` · app `dukaan-llm` · one **L4**, kept warm with `min_containers=1`) serves *everything on one GPU* — the **LLM + vision/OCR** (`llama-server`, Gemma-4-12B GGUF, OpenAI-compatible `/v1`), **STT** (`/stt`, faster-whisper) and **TTS** (`/tts`, Veena). Deploy: `PYTHONPATH="$PWD" modal deploy scripts/modal_app.py`.
-- The **HF Space** runs the Gradio "Bahi-Khata" UI on free CPU and calls Modal via the secrets `DUKAAN_LLM_BASE_URL` / `DUKAAN_STT_BASE_URL` / `DUKAAN_TTS_BASE_URL` (+ `HF_TOKEN` for gated Veena). One warm GPU = one bill, and the whole stack is **open-weight models (≤32B)** — no proprietary AI APIs.
-- Warm the endpoint ~2 min before a demo: `uv run python scripts/prewarm.py https://<workspace>--dukaan-llm-serve.modal.run`.
-
-A self-contained single-container **L4 Space** (`Dockerfile` + `scripts/space_entrypoint.sh`) is kept as a fallback that runs the LLM in-process; the entrypoint auto-detects local vs remote from `DUKAAN_LLM_BASE_URL`.
-
-## Tracks & badges
-
-| Target | Evidence |
+| Badge | Evidence |
 |---|---|
-| 🏡 **Backyard AI** (Track-1) | A real kirana owner's daily problem — voice udhaar, challan OCR, FEFO/expiry, festival nudges — run on the owner's real books (demo video). |
-| 🟢 **Modal** (sponsor) | LLM + OCR + STT + TTS all hosted on Modal (`scripts/modal_app.py`). |
-| 🤖 **Best Agent** | deepagents loop · 10 tools (read + write + vision OCR) · confirm-before-write · a visible tool-call trace under every reply. |
-| 🎨 **Off-Brand** | Custom "Bahi-Khata" HTML/CSS/JS ledger UI (cream paper, brass numerals, instant EN⇄हिं). |
+| 🏡 **Backyard AI** | A real kirana owner's daily problem: voice *udhaar*, bill OCR, expiry/FEFO, festival nudges, run on his own books (demo video). |
+| 🟢 **Modal** | LLM + vision/OCR and STT + TTS hosted on Modal across two warm L4 GPUs (`scripts/modal_app.py`). |
+| 🤖 **Best Agent** | deepagents loop, 10 read/write/vision tools, confirm-before-write, a visible tool-call trace under every reply. |
+| 🎨 **Off-Brand** | Custom "Bahi-Khata" HTML/CSS/JS ledger UI with instant EN/हिं. |
 | 🦙 **Llama Champion** | Runs on `llama.cpp` (`llama-server`). |
-| 📓 **Field Notes** | Build write-up / blog (linked below). |
+| 📓 **Field Notes** | Build write-up, served at `/blog` and linked above. |
 | 📡 **Sharing-is-Caring** | Exported agent trace (`scripts/export_trace.py`). |
-| 🐜 **Tiny Titan** / 🏮 **OpenBMB** | Companion entry swaps the LLM to **MiniCPM-V 4.6 (≤4B)** — config-only (`DUKAAN_LLM_*`). |
+| 🎬 **Best Demo** | Real-owner Hindi demo (video linked above). |
 
 ## Evaluation
 
-- **Headless suite** — `uv run pytest -q` → **56 pass / 2 skip** (LLM, STT and vision mocked): cross-DB integrity, FEFO lots, balances, staging/oversell, tools, onboarding, festival intent.
-- **Real-model end-to-end** — `scripts/e2e_full.py` drives ~24 real Gemma turns over the seeded kirana data across **38 hard checks**: tool routing (read vs write), ground-truth lookups, confirm-before-write, FEFO sale, qty-merge restock, oversell hard-block, SQL guard, ambiguity clarification, vision challan receive, Hindi STT, TTS, morning briefing, festival calendar. GPU smoke: `scripts/e2e_gpu.sbatch`.
+- **Headless suite:** `uv run pytest -q` gives 56 pass / 2 skip (LLM, STT, and vision mocked). It covers cross-DB integrity, FEFO lots, balances, the oversell guard, the tools, onboarding, and festival intent.
+- **Real-model end-to-end:** `scripts/e2e_full.py` drives about 24 real Gemma turns over the seeded shop across 38 checks: tool routing (read vs write), ground-truth lookups, confirm-before-write, a FEFO sale, a quantity-merge restock, the oversell block, a vision bill receive, Hindi STT, TTS, the morning briefing, and the festival calendar.
 
-## Demo · blog · social
+## Team
 
-- 🎬 Demo video: _add link_
-- 📓 Blog (Field Notes): _add link_
-- 📣 Social post: _add link_
+- Pratham Singla ([@yobro4619](hhttps://huggingface.co/yobro4619))
+- Adesh Gupta ([@aadex](https://huggingface.co/aadex))
+- Shivank Garg ([@shivank21](https://huggingface.co/shivank21))
 
-## Layout
+## Quickstart (local dev)
 
+```bash
+uv sync
+# Gemma GGUF + mmproj, Whisper, Veena + SNAC. Veena is gated: run `hf auth login` first.
+bash scripts/download_models.sh
+# build and seed the two demo databases
+uv run python -m dukaan.db --reset
+# UI at :7860, blog at :7860/blog
+uv run python -m dukaan.app
 ```
-dukaan/        # app package (config, db, ops, llm, agent, tools, stt, tts, normalize, proactive, app)
-  seed_inventory.py  # research-grounded catalog (~190 SKUs, suppliers, restocks)
-  seed_ledger.py     # research-grounded customers + ~120 days of sales & udhaar
-scripts/       # serve_llm.sh, run.sbatch, run_local.sh, download_models.sh
-tests/         # pytest suite (db guard, ops, tools, numwords, e2e)
-data/          # inventory.db + transactions.db (built by `python -m dukaan.db --reset`)
-models/        # downloaded GGUF + mmproj
-vendor/        # llama.cpp (built with CUDA)
-```
 
-See `tasks/todo.md` for build status.
+For the hosted setup (Modal LLM + HF Space), see Hosting above.

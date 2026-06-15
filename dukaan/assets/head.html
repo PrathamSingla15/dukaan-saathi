@@ -161,27 +161,112 @@
       if (!was) krow.classList.add("dk-row--selected");
       return;
     }
-    var sp = t.closest && t.closest("[data-speak-idx]");
-    if (sp) { window.dukaanSpeak(sp.getAttribute("data-speak-idx")); return; }
+    var sp = t.closest && t.closest(".dk-speak[data-mid]");
+    if (sp) { window.dukaanListen(sp.getAttribute("data-mid")); return; }
   });
 
-  /* Per-message speaker icon: write the message index into the hidden bridge
-     textbox and click the hidden button → speak() synthesizes just that reply. */
-  window.dukaanSpeak = function (idx) {
-    var inp = document.querySelector("#dk-speak-idx textarea") ||
-              document.querySelector("#dk-speak-idx input");
-    if (!inp) return;
-    var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
-    var d = Object.getOwnPropertyDescriptor(proto.prototype, "value");
-    var val = String(idx) + "|" + Date.now();   // nonce → value always changes
-    if (d && d.set) d.set.call(inp, val); else inp.value = val;
-    // input updates Gradio's bound value; change/blur commit it before we click
-    inp.dispatchEvent(new Event("input", { bubbles: true }));
-    inp.dispatchEvent(new Event("change", { bubbles: true }));
-    inp.dispatchEvent(new Event("blur", { bubbles: true }));
-    var btn = document.getElementById("dk-speak-btn");
-    if (btn) setTimeout(function () { (btn.querySelector("button") || btn).click(); }, 300);
-  };
+  /* ---- per-message audio: own <audio>, tap-to-play, pausable -------------
+     We do NOT use Gradio's audio player (its source handling is opaque to us).
+     play()/load_briefing() put a served file URL into the hidden #dk-audio-url
+     textbox; the watcher below picks up new URLs and plays them through OUR OWN
+     Audio() element, which we fully control (pause / resume / ended). The icon
+     morphs speaker -> spinner -> pause -> play. One reply plays at a time. */
+  (function () {
+    var player = null, currentMid = null, lastMid = null, pendingMid = null;
+    var lastVal = "", pendingTimer = null;
+
+    function getPlayer() {
+      if (player) return player;
+      player = new Audio();
+      player.addEventListener("playing", function () { if (currentMid) setIcon(currentMid, "play"); });
+      player.addEventListener("pause",   function () { if (currentMid && !player.ended) setIcon(currentMid, "pause"); });
+      player.addEventListener("ended",   function () { if (currentMid) setIcon(currentMid, "idle"); currentMid = null; });
+      return player;
+    }
+    function cssEsc(s) { return String(s).replace(/["\\]/g, "\\$&"); }
+    function setIcon(mid, state) {
+      if (!mid) return;
+      var span = document.querySelector('.dk-speak[data-mid="' + cssEsc(mid) + '"]');
+      if (!span) return;
+      var cls = { idle: "ph-speaker-high", load: "ph-spinner-gap dk-spin",
+                  play: "ph-pause", pause: "ph-play" }[state] || "ph-speaker-high";
+      span.innerHTML = '<i class="ph ' + cls + '" aria-hidden="true"></i>';
+      span.setAttribute("data-state", state);
+    }
+    function resetIcons(except) {
+      document.querySelectorAll('.dk-speak[data-mid]').forEach(function (s) {
+        var m = s.getAttribute("data-mid");
+        if (m && m !== except) setIcon(m, "idle");
+      });
+    }
+    function clearPending() { if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; } }
+    function urlBoxVal() {
+      var b = document.querySelector("#dk-audio-url textarea") || document.querySelector("#dk-audio-url input");
+      return b ? b.value : "";
+    }
+    function startPlay(mid, url) {     // play a new (url) or already-loaded file from the top
+      var p = getPlayer();
+      if (url) p.src = url;
+      try { p.currentTime = 0; } catch (e) {}
+      var pr = p.play(); if (pr && pr.catch) pr.catch(function () {});
+      resetIcons(mid); currentMid = mid; lastMid = mid; setIcon(mid, "play");
+    }
+
+    /* watcher: when the server delivers a new audio URL, play it through our <audio> */
+    setInterval(function () {
+      var v = urlBoxVal();
+      if (!v || v === lastVal) return;
+      lastVal = v;
+      var url = v.split("|")[0];
+      if (!url) return;
+      clearPending();
+      if (pendingMid) { startPlay(pendingMid, url); pendingMid = null; }
+      else {                                   // briefing / non-chat audio: just play it
+        var p = getPlayer(); p.src = url; try { p.currentTime = 0; } catch (e) {}
+        var pr = p.play(); if (pr && pr.catch) pr.catch(function () {}); currentMid = null;
+      }
+    }, 250);
+
+    window.dukaanListen = function (mid) {
+      var p = getPlayer();
+      if (mid && mid === currentMid && p.src && !p.ended) {     // pause / resume the current one
+        if (p.paused) { p.play(); setIcon(mid, "play"); } else { p.pause(); setIcon(mid, "pause"); }
+        return;
+      }
+      if (mid && mid === lastMid && p.src) { startPlay(mid); return; }   // re-listen the loaded file -> instant
+      // new message -> spinner + ask the server (the watcher plays it when it arrives)
+      pendingMid = mid; setIcon(mid, "load");
+      clearPending();
+      pendingTimer = setTimeout(function () { if (pendingMid) { setIcon(pendingMid, "idle"); pendingMid = null; } }, 130000);
+      var inp = document.querySelector("#dk-speak-idx textarea") ||
+                document.querySelector("#dk-speak-idx input");
+      if (!inp) return;
+      var proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
+      var d = Object.getOwnPropertyDescriptor(proto.prototype, "value");
+      var val = String(mid) + "|" + Date.now();   // nonce -> value always changes
+      if (d && d.set) d.set.call(inp, val); else inp.value = val;
+      inp.dispatchEvent(new Event("input", { bubbles: true }));
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+      inp.dispatchEvent(new Event("blur", { bubbles: true }));
+      var btn = document.getElementById("dk-speak-btn");
+      if (btn) setTimeout(function () { (btn.querySelector("button") || btn).click(); }, 150);
+    };
+
+    window.dukaanStopAudio = function () {
+      if (player) { try { player.pause(); } catch (e) {} }
+      clearPending();
+      if (currentMid) setIcon(currentMid, "idle");
+      if (pendingMid) setIcon(pendingMid, "idle");
+      currentMid = null; pendingMid = null;
+    };
+
+    /* stop playback when a new turn starts (Enter in the composer) */
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      var c = e.target && e.target.closest && e.target.closest("#dk-composer");
+      if (c) window.dukaanStopAudio();
+    }, true);
+  })();
 
   /* Khata row "Send reminder" pill: write the customer name into the hidden bridge
      textbox and click the hidden button → remind_one() drafts that one reminder. */

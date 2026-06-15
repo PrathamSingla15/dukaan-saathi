@@ -1,6 +1,8 @@
-# Dukaan Saathi — single-container GPU Space (HF Spaces, sdk: docker).
-# Runs the llama.cpp `llama-server` (Gemma-4-12B Q4_K_M + vision mmproj) AND the
-# Gradio app (which also loads faster-whisper STT + Veena TTS) in one container.
+# Dukaan Saathi: HF Space image (sdk: docker).
+# Default: the Gradio app calls the LLM + vision/OCR + STT + TTS hosted on Modal.
+# The image is built on the llama.cpp CUDA base so it can also self-host the
+# `llama-server` (Gemma-4-12B Q4_K_M + vision mmproj) in-container when
+# DUKAAN_LLM_BASE_URL points at localhost (see scripts/space_entrypoint.sh).
 #
 # Base = official prebuilt llama.cpp CUDA server image (CUDA 12.8.1) → we get the
 # maintained `llama-server` binary + matching CUDA runtime for free, then layer the
@@ -34,6 +36,12 @@ COPY --chown=user pyproject.toml uv.lock README.md ./
 COPY --chown=user dukaan ./dukaan
 COPY --chown=user scripts ./scripts
 RUN uv sync --frozen --no-dev
+
+# --- static assets served by the app: blog.html at /blog and images under /figures/*
+#     (copied after uv sync so editing them does not re-trigger the dependency sync).
+COPY --chown=user blog.html ./
+COPY --chown=user figures ./figures
+COPY --chown=user data ./data
 
 # --- Space runtime config (override in Space Settings → Variables/Secrets as needed)
 ENV DUKAAN_DATA_DIR=/data \

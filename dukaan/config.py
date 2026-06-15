@@ -58,7 +58,7 @@ LLM_ENABLE_THINKING = _flag("DUKAAN_LLM_ENABLE_THINKING", False)
 AGENT_RECURSION_LIMIT = int(_env("DUKAAN_AGENT_RECURSION_LIMIT", "60"))
 
 # ------------------------------------------------------ llama-server launch params
-# (used by scripts/serve_llm.sh and scripts/run.sbatch)
+# (used by the local/in-container llama-server launch; Modal sets its own env)
 GEMMA_GGUF = Path(
     _env("DUKAAN_GEMMA_GGUF", str(MODELS_DIR / "gemma4" / "gemma-4-12B-it-Q8_0.gguf"))
 )
@@ -96,6 +96,10 @@ VEENA_MODEL = _env("DUKAAN_VEENA_MODEL", "maya-research/veena-tts")
 VEENA_SPEAKER = _env("DUKAAN_VEENA_SPEAKER", "agastya")  # kavya | agastya | maitri | vinaya
 VEENA_SNAC_MODEL = _env("DUKAAN_VEENA_SNAC", "hubertsiuzdak/snac_24khz")
 VEENA_4BIT = _flag("DUKAAN_VEENA_4BIT", False)  # 4-bit (needs bitsandbytes); else bf16
+# Fixed RNG seed for Veena generation. With the speaker pinned, seeding before every
+# chunk makes the voice deterministic and identical across chunks / calls / the whole
+# app (no male<->female drift). Override with DUKAAN_VEENA_SEED.
+VEENA_SEED = int(_env("DUKAAN_VEENA_SEED", "1234"))
 
 # --------------------------------------------------- remote inference seams (Modal)
 # When set, STT/TTS are called over HTTP at these endpoints instead of loading the

@@ -1,12 +1,15 @@
-# Keep the Space image (and the 1 GB git repo) lean — never ship weights/builds.
+# Keep the Space image lean — never ship weights/builds.
+# (The curated demo DB under data/ IS shipped so the Space starts from the submission state.)
 .git
 models/
 vendor/
-data/
 logs/
-*.db
+docs/
+tasks/
+scripts/dev/
+dukaan/seed_inventory.py
+dukaan/seed_ledger.py
 *.wav
-*.png
 **/__pycache__/
 .venv/
 .pytest_cache/
